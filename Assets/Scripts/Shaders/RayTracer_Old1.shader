@@ -12,8 +12,6 @@ Shader "Custom/RayTracer"
 			#include "UnityCG.cginc"
 			#pragma multi_compile _ DEBUG_VIS
 
-			#define MAX_DISTANCE 5000.0
-
 			struct appdata
 			{
 				float4 vertex : POSITION;
@@ -178,17 +176,13 @@ Shader "Custom/RayTracer"
 				const float3 SkyColourHorizon = float3(1, 1, 1);
 				const float3 SkyColourZenith = float3(0.08, 0.37, 0.73);
 				
+
 				float skyGradientT = pow(smoothstep(0, 0.4, dir.y), 0.35);
 				float groundToSkyT = smoothstep(-0.01, 0, dir.y);
 				float3 skyGradient = lerp(SkyColourHorizon, SkyColourZenith, skyGradientT);
-				
-				// Combine ground, sky, and sun
-				// WITH SUN
 				float sun = pow(max(0, dot(dir, _WorldSpaceLightPos0.xyz)), SunFocus) * SunIntensity;
-				// NO SUN
+				// Combine ground, sky, and sun
 				float3 composite = lerp(GroundColour, skyGradient, groundToSkyT) + sun * SunColour * (groundToSkyT >= 1);
-				// float3 composite = lerp(GroundColour, skyGradient, groundToSkyT);// + sun * SunColour * (groundToSkyT >= 1);
-
 				return composite;
 			}
 
@@ -241,10 +235,7 @@ Shader "Custom/RayTracer"
 			TriangleHitInfo RayTriangleBVH(inout Ray ray, float rayLength, int nodeOffset, int triOffset, inout int2 stats)
 			{
 				TriangleHitInfo result;
-				result.didHit = false;
 				result.dst = rayLength;
-				result.hitPoint = 0;
-				result.normal = 0;
 				result.triIndex = -1;
 
 				int stack[32];
@@ -268,7 +259,6 @@ Shader "Custom/RayTracer"
 							{
 								result = triHitInfo;
 								result.triIndex = node.startIndex + i;
-								result.didHit = true;
 							}
 						}
 					}
@@ -319,12 +309,8 @@ Shader "Custom/RayTracer"
 
 			ModelHitInfo CalculateRayCollision(Ray worldRay, int bounce, out int2 stats)
 			{
-				stats = 0;
 				ModelHitInfo result;
-				result.didHit = false;
 				result.dst = 1.#INF;
-				result.hitPoint = 0;
-				result.normal = 0;
 				Ray localRay;
 
 				for (int i = 0; i < modelCount; i++)
@@ -346,7 +332,7 @@ Shader "Custom/RayTracer"
 					TriangleHitInfo hit = RayTriangleBVH(localRay, result.dst, model.nodeOffset, model.triOffset, stats);
 
 					// Record closest hit
-					if (hit.didHit && hit.dst < result.dst)
+					if (hit.dst < result.dst)
 					{
 						result.didHit = true;
 						result.dst = hit.dst;
@@ -366,24 +352,8 @@ Shader "Custom/RayTracer"
 				return x - y * floor(x / y);
 			}
 
-			float3 SampleCone(float3 axis, float cosThetaMax, inout uint rngState) // CHANGED
+			float3 Trace(float3 rayOrigin, float3 rayDir, inout uint rngState)
 			{
-				float u1 = RandomValue(rngState); // CHANGED
-				float u2 = RandomValue(rngState); // CHANGED
-
-				float cosTheta = lerp(1.0, cosThetaMax, u1); // CHANGED
-				float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta)); // CHANGED
-				float phi = 2.0 * PI * u2; // CHANGED
-
-				float3 t = normalize(abs(axis.z) < 0.999 ? cross(axis, float3(0,0,1)) : cross(axis, float3(0,1,0))); // CHANGED
-				float3 b = cross(t, axis); // CHANGED
-
-				return normalize(t * (cos(phi) * sinTheta) + b * (sin(phi) * sinTheta) + axis * cosTheta); // CHANGED
-			}
-
-			float3 Trace(float3 rayOrigin, float3 rayDir, inout uint rngState, out float primaryDistance)
-			{
-				primaryDistance = 0.0;
 				float3 incomingLight = 0;
 				float3 rayColour = 1;
 				
@@ -399,11 +369,6 @@ Shader "Custom/RayTracer"
 
 					if (hitInfo.didHit)
 					{
-						if (bounceIndex == 0) // Primary distance only
-						{
-							primaryDistance = length(hitInfo.hitPoint - _WorldSpaceCameraPos);
-						}
-
 						dstSum += hitInfo.dst;
 						RayTracingMaterial material = hitInfo.material;
 						if (material.flag == 1) // Checker pattern
@@ -415,41 +380,8 @@ Shader "Custom/RayTracer"
 						// Figure out new ray position and direction
 						bool isSpecularBounce = material.specularProbability >= RandomValue(rngState);
 
-						// Offset to avoid self-hit speckles
-						rayOrigin = hitInfo.hitPoint + hitInfo.normal * 1e-4;
-
-						// // Do a sun check
-						// float3 sunDir = normalize(_WorldSpaceLightPos0.xyz); // Directional sun direction
-						// float nDotL = max(0.0, dot(hitInfo.normal, sunDir));
-						// ---------------------------------------------------------------------------------
-						// Do a sun check
-						float3 sunAxis = normalize(_WorldSpaceLightPos0.xyz); // CHANGED: axis of the sun cone
-						// Derive a small cone from SunFocus (tweak if needed)
-						float cosThetaMax = pow(0.5, 1.0 / max(SunFocus, 1.0)); // CHANGED
-						float3 sunDir = SampleCone(sunAxis, cosThetaMax, rngState); // CHANGED: jittered sun direction
-						float nDotL = max(0.0, dot(hitInfo.normal, sunDir)); // CHANGED: use jittered dir
-
-						if (nDotL > 0.0)
-						{
-							Ray shadowRay;
-							shadowRay.origin = rayOrigin;
-							shadowRay.dir = sunDir;
-							shadowRay.invDir = 1.0 / shadowRay.dir;
-
-							int2 sunStats;
-							ModelHitInfo occ = CalculateRayCollision(shadowRay, bounceIndex + 1, sunStats);
-
-							if (!occ.didHit)
-							{
-								// Original / Option A: treat sun as directional/area light (stable energy)
-								// incomingLight += rayColour * (SunColour * SunIntensity) * nDotL; // CHANGED
-
-								// Option B: keep your "sun lobe" look (more variance, but matches your SunFocus idea)
-								float sun = pow(max(0.0, dot(sunDir, sunAxis)), SunFocus) * SunIntensity; // CHANGED
-								incomingLight += rayColour * (SunColour * sun) * nDotL; // CHANGED
-							}
-						}
-
+						rayOrigin = hitInfo.hitPoint;
+						// float3 diffuseDir = normalize(hitInfo.normal + RandomDirection(rngState)); // OLD
 						float3 diffuseDir = CosineSampleHemisphere(hitInfo.normal, rngState);
 						float3 specularDir = reflect(rayDir, hitInfo.normal);
 						rayDir = normalize(lerp(diffuseDir, specularDir, material.smoothness * isSpecularBounce));
@@ -535,9 +467,6 @@ Shader "Custom/RayTracer"
 				
 				// Trace multiple rays and average together
 				float3 totalIncomingLight = 0;
-				// Distance averaging
-				float distSum = 0.0;
-				int distCount = 0;
 
 				for (int rayIndex = 0; rayIndex < NumRaysPerPixel; rayIndex++)
 				{
@@ -553,22 +482,12 @@ Shader "Custom/RayTracer"
 					float3 rayDir = normalize(jitteredFocusPoint - rayOrigin);
 
 					// Trace
-					float sampleDist;
-					totalIncomingLight += Trace(rayOrigin, rayDir, rngState, sampleDist);
-
-					// Update distance sum/count
-					if (sampleDist > 0.0) // Only count real geometry hits
-					{
-						distSum += sampleDist;
-						distCount++;
-					}
+					totalIncomingLight += Trace(rayOrigin, rayDir, rngState);
 				}
 
-				// Average the incoming light and distance
-				float3 pixelCol = totalIncomingLight / NumRaysPerPixel;
-				float distance = (distCount > 0) ? (distSum / distCount) : MAX_DISTANCE;
 
-				return float4(pixelCol,  distance);
+				float3 pixelCol = totalIncomingLight / NumRaysPerPixel;
+				return float4(pixelCol, 1);
 			}
 
 			ENDCG

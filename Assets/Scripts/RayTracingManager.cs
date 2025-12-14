@@ -15,17 +15,23 @@ public class RayTracingManager : MonoBehaviour
 
     [Header("Main Settings")]
     [SerializeField] bool rayTracingEnabled = true;
-    public bool accumulate = true;
+    
     public bool useSky;
     [SerializeField] float sunFocus = 500;
     [SerializeField] float sunIntensity = 10;
     [SerializeField] Color sunColor = Color.white;
 
-    [SerializeField, Range(0, 32)] int maxBounceCount = 4;
-    [SerializeField, Range(0, 64)] int numRaysPerPixel = 2;
+    [SerializeField, Range(1, 8)] int multipassCount = 1;
+    [SerializeField, Range(1, 32)] int maxBounceCount = 4;
+    [SerializeField, Range(1, 64)] int numRaysPerPixel = 2;
     [SerializeField, Min(0)] float defocusStrength = 0;
     [SerializeField, Min(0)] float divergeStrength = 0.3f;
     [SerializeField, Min(0)] float focusDistance = 1;
+
+    [Header("Denoising")]
+    [SerializeField, Range(0, maxAccumulatedFrames)] int denoisingFrames = 1;
+    //[SerializeField, Range(1, 8)] int denoisingRadius = 1;
+    //[SerializeField, Range(1, 8)] int denoisingIterations = 1;
 
     [Header("Debug Settings")]
     [SerializeField] VisMode visMode;
@@ -38,8 +44,9 @@ public class RayTracingManager : MonoBehaviour
     [SerializeField] Shader rayTracingShader;
     [SerializeField] Shader accumulateShader;
 
-    [Header("Info")]
-    [SerializeField] int numAccumulatedFrames;
+    //[Header("Info")]
+    /*[SerializeField]*/ int numAccumulatedFrames;
+    private bool Accumulate { get => denoisingFrames > 0; }
 
     // Materials and render textures
     Material rayTracingMaterial;
@@ -56,22 +63,46 @@ public class RayTracingManager : MonoBehaviour
     bool hasBVH;
     LocalKeyword debugVisShaderKeyword;
 
+    private const int maxAccumulatedFrames = 8;
+    private readonly RenderTexture[] previousFrames = new RenderTexture[maxAccumulatedFrames];
+
+    private void ResetRenderer()
+    {
+        numAccumulatedFrames = 0;
+
+        for (int i = 0; i < previousFrames.Length; i++)
+        {
+            // Null-safe
+            ShaderHelper.Release(previousFrames[i]);
+            previousFrames[i] = null;
+
+            var rtName = i < 9 ? $"Frame0{i + 1}" : $"Frame{i + 1}";
+
+            ShaderHelper.CreateRenderTexture(
+                ref previousFrames[i],
+                Screen.width,
+                Screen.height,
+                FilterMode.Bilinear,
+                ShaderHelper.RGBA_SFloat,
+                rtName);
+        }
+    }
 
     private void OnEnable()
     {
-        numAccumulatedFrames = 0;
+        ResetRenderer();
         hasBVH = false;
     }
 
     private void Update()
     {
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            numAccumulatedFrames = 1;
-            Debug.Log("Reset render");
-        }
+        //if (Input.GetKeyDown(KeyCode.Space))
+        //{
+        //    ResetRenderer();
+        //    Debug.Log("Reset render");
+        //}
 
-        if (Input.GetKeyDown(KeyCode.S))
+        if (Input.GetKeyDown(KeyCode.P))
         {
             string path = System.IO.Path.Combine(Application.persistentDataPath, "screencap_ray.png");
             ScreenCapture.CaptureScreenshot(path);
@@ -105,33 +136,52 @@ public class RayTracingManager : MonoBehaviour
         else
         {
             Camera.current.cullingMask = rayTracingEnabled ? 0 : 2147483647;
-            if (rayTracingEnabled && !useSceneView)
+            if (rayTracingEnabled && !useSceneView && Application.isPlaying)
             {
                 InitFrame();
 
-                if (accumulate && visMode == VisMode.Default)
+                if (Accumulate && visMode == VisMode.Default)
                 {
-                    // Create copy of prev frame
-                    RenderTexture prevFrameCopy = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
-                    Graphics.Blit(resultTexture, prevFrameCopy);
+                    var frameIndex = 0;
 
-                    // Run the ray tracing shader and draw the result to a temp texture
-                    rayTracingMaterial.SetInt("Frame", numAccumulatedFrames);
-                    RenderTexture currentFrame = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
-                    Graphics.Blit(null, currentFrame, rayTracingMaterial);
+                    for (int i = 0; i < multipassCount; i++)
+                    {
+                        frameIndex = (numAccumulatedFrames % maxAccumulatedFrames) + 1;
+                        
+                        var slot = previousFrames[frameIndex - 1];
+                        rayTracingMaterial.SetInt("Frame", numAccumulatedFrames);
+                        Graphics.Blit(null, slot, rayTracingMaterial);
 
-                    // Accumulate
-                    accumulateMaterial.SetInt("_Frame", numAccumulatedFrames);
-                    accumulateMaterial.SetTexture("_PrevFrame", prevFrameCopy);
-                    Graphics.Blit(currentFrame, resultTexture, accumulateMaterial);
+                        // frameIndex works like this:
+                        // numAccumulatedFrames => frameIndex
+                        // 0 => 1
+                        // 1 => 2
+                        // ...
+                        // 7 => 8
+                        // 8 => 1 (restart loop)
+
+                        accumulateMaterial.SetTexture("_Frame01", previousFrames[0]);
+                        accumulateMaterial.SetTexture("_Frame02", previousFrames[1]);
+                        accumulateMaterial.SetTexture("_Frame03", previousFrames[2]);
+                        accumulateMaterial.SetTexture("_Frame04", previousFrames[3]);
+                        accumulateMaterial.SetTexture("_Frame05", previousFrames[4]);
+                        accumulateMaterial.SetTexture("_Frame06", previousFrames[5]);
+                        accumulateMaterial.SetTexture("_Frame07", previousFrames[6]);
+                        accumulateMaterial.SetTexture("_Frame08", previousFrames[7]);
+
+                        numAccumulatedFrames += Application.isPlaying ? 1 : 0;
+                    }
+
+                    var maxFrames = Mathf.Min(numAccumulatedFrames + 1, denoisingFrames);
+
+                    accumulateMaterial.SetInt("_MaxFrames", maxFrames);
+                    accumulateMaterial.SetInt("_Frame", frameIndex);
+
+                    // Run the accumulate shader and draw the result to a result texture
+                    Graphics.Blit(null, resultTexture, accumulateMaterial);
 
                     // Draw result to screen
                     Graphics.Blit(resultTexture, target);
-
-                    // Release temps
-                    RenderTexture.ReleaseTemporary(prevFrameCopy);
-                    RenderTexture.ReleaseTemporary(currentFrame);
-                    numAccumulatedFrames += Application.isPlaying ? 1 : 0;
                 }
                 else
                 {
@@ -274,6 +324,13 @@ public class RayTracingManager : MonoBehaviour
         {
             ShaderHelper.Release(triangleBuffer, nodeBuffer, modelBuffer);
             ShaderHelper.Release(resultTexture);
+
+            foreach (var rt in previousFrames)
+            {
+                // Null-safe
+                ShaderHelper.Release(rt);
+            }
+
             Destroy(rayTracingMaterial);
         }
     }
