@@ -12,6 +12,9 @@ Shader "Custom/RayTracer"
 			#include "UnityCG.cginc"
 			#pragma multi_compile _ DEBUG_VIS
 
+			#define MAX_DISTANCE 5000.0
+			#define NO_HIT 0.0
+
 			struct appdata
 			{
 				float4 vertex : POSITION;
@@ -180,9 +183,9 @@ Shader "Custom/RayTracer"
 				float skyGradientT = pow(smoothstep(0, 0.4, dir.y), 0.35);
 				float groundToSkyT = smoothstep(-0.01, 0, dir.y);
 				float3 skyGradient = lerp(SkyColourHorizon, SkyColourZenith, skyGradientT);
-				float sun = pow(max(0, dot(dir, _WorldSpaceLightPos0.xyz)), SunFocus) * SunIntensity;
+				float sun = pow(max(0, dot(dir, _WorldSpaceLightPos0.xyz)), SunFocus) * SunIntensity; // TODO
 				// Combine ground, sky, and sun
-				float3 composite = lerp(GroundColour, skyGradient, groundToSkyT) + sun * SunColour * (groundToSkyT >= 1);
+				float3 composite = lerp(GroundColour, skyGradient, groundToSkyT);//; + sun * SunColour * (groundToSkyT >= 1);
 				return composite;
 			}
 
@@ -235,7 +238,10 @@ Shader "Custom/RayTracer"
 			TriangleHitInfo RayTriangleBVH(inout Ray ray, float rayLength, int nodeOffset, int triOffset, inout int2 stats)
 			{
 				TriangleHitInfo result;
+				result.didHit = false;
 				result.dst = rayLength;
+				result.hitPoint = 0;
+				result.normal = 0;
 				result.triIndex = -1;
 
 				int stack[32];
@@ -259,6 +265,7 @@ Shader "Custom/RayTracer"
 							{
 								result = triHitInfo;
 								result.triIndex = node.startIndex + i;
+								result.didHit = true;
 							}
 						}
 					}
@@ -289,15 +296,26 @@ Shader "Custom/RayTracer"
 				return result;
 			}
 
-			ModelHitInfo CalculateRayCollision(Ray worldRay, out int2 stats)
+			ModelHitInfo CalculateRayCollision(Ray worldRay, int bounce, out int2 stats)
 			{
+				stats = 0;
 				ModelHitInfo result;
+				result.didHit = false;
 				result.dst = 1.#INF;
+				result.hitPoint = 0;
+				result.normal = 0;
 				Ray localRay;
 
 				for (int i = 0; i < modelCount; i++)
 				{
 					Model model = ModelInfo[i];
+
+					if(model.material.flag == 2 && bounce == 0) // InvisibleLight
+					{
+						// TODO: Add emission pass info
+						continue;
+					}
+
 					// Transform ray into model's local coordinate space
 					localRay.origin = mul(model.worldToLocalMatrix, float4(worldRay.origin, 1));
 					localRay.dir = mul(model.worldToLocalMatrix, float4(worldRay.dir, 0));
@@ -307,7 +325,7 @@ Shader "Custom/RayTracer"
 					TriangleHitInfo hit = RayTriangleBVH(localRay, result.dst, model.nodeOffset, model.triOffset, stats);
 
 					// Record closest hit
-					if (hit.dst < result.dst)
+					if (hit.didHit && hit.dst < result.dst)
 					{
 						result.didHit = true;
 						result.dst = hit.dst;
@@ -315,6 +333,8 @@ Shader "Custom/RayTracer"
 						result.hitPoint = worldRay.origin + worldRay.dir * hit.dst;
 						result.material = model.material;
 					}
+
+					// TODO: Apply the emission pass here.
 				}
 
 				return result;
@@ -325,23 +345,30 @@ Shader "Custom/RayTracer"
 				return x - y * floor(x / y);
 			}
 
-			float3 Trace(float3 rayOrigin, float3 rayDir, inout uint rngState)
+			float3 Trace(float3 rayOrigin, float3 rayDir, inout uint rngState, out float firstRayDst)
 			{
+				firstRayDst = NO_HIT;
+
 				float3 incomingLight = 0;
 				float3 rayColour = 1;
 				
 				int2 stats;
 				float dstSum = 0;
 
-				for (int bounceIndex = 0; bounceIndex <= MaxBounceCount; bounceIndex++)
+				for (int bounceIndex = 0; bounceIndex < MaxBounceCount; bounceIndex++)
 				{
 					Ray ray;
 					ray.origin = rayOrigin;
 					ray.dir = rayDir;
-					ModelHitInfo hitInfo = CalculateRayCollision(ray, stats);
+					ModelHitInfo hitInfo = CalculateRayCollision(ray, bounceIndex, stats);
 
 					if (hitInfo.didHit)
 					{
+						if (bounceIndex == 0) // First hit only
+						{
+							firstRayDst = length(hitInfo.hitPoint - _WorldSpaceCameraPos);
+						}
+
 						dstSum += hitInfo.dst;
 						RayTracingMaterial material = hitInfo.material;
 						if (material.flag == 1) // Checker pattern
@@ -353,7 +380,9 @@ Shader "Custom/RayTracer"
 						// Figure out new ray position and direction
 						bool isSpecularBounce = material.specularProbability >= RandomValue(rngState);
 
-						rayOrigin = hitInfo.hitPoint;
+						// Offset to avoid self-hit speckles
+						rayOrigin = hitInfo.hitPoint + hitInfo.normal * 1e-4;
+
 						float3 diffuseDir = normalize(hitInfo.normal + RandomDirection(rngState));
 						float3 specularDir = reflect(rayDir, hitInfo.normal);
 						rayDir = normalize(lerp(diffuseDir, specularDir, material.smoothness * isSpecularBounce));
@@ -387,7 +416,7 @@ Shader "Custom/RayTracer"
 				Ray ray;
 				ray.origin = rayOrigin;
 				ray.dir = rayDir;
-				ModelHitInfo hitInfo = CalculateRayCollision(ray, stats);
+				ModelHitInfo hitInfo = CalculateRayCollision(ray, 0, stats);
 
 				// Triangle test count vis
 				if (visMode == 1)
@@ -439,6 +468,14 @@ Shader "Custom/RayTracer"
 				
 				// Trace multiple rays and average together
 				float3 totalIncomingLight = 0;
+				// Distance averaging
+				float distSum = 0.0;
+				int distCount = 0;
+
+				if(RandomValue(rngState) > 0.05f) // TODO: Configurable
+				{
+					return float4(0,0,0, 0);
+				}
 
 				for (int rayIndex = 0; rayIndex < NumRaysPerPixel; rayIndex++)
 				{
@@ -454,12 +491,22 @@ Shader "Custom/RayTracer"
 					float3 rayDir = normalize(jitteredFocusPoint - rayOrigin);
 
 					// Trace
-					totalIncomingLight += Trace(rayOrigin, rayDir, rngState);
+					float sampleDist;
+					totalIncomingLight += Trace(rayOrigin, rayDir, rngState, sampleDist);
+
+					// Update distance sum/count
+					if (sampleDist > NO_HIT) // Only count real geometry hits
+					{
+						distSum += sampleDist;
+						distCount++;
+					}
 				}
 
-
+				// Average the incoming light and distance
 				float3 pixelCol = totalIncomingLight / NumRaysPerPixel;
-				return float4(pixelCol, 1);
+				float distance = (distCount > 0) ? (distSum / distCount) : MAX_DISTANCE;
+
+				return float4(pixelCol, distance);
 			}
 
 			ENDCG

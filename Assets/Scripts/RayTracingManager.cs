@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.Rendering;
 using System.Collections.Generic;
+using System;
 
 public class RayTracingManager : MonoBehaviour
 {
@@ -13,8 +14,12 @@ public class RayTracingManager : MonoBehaviour
         Normal = 4
     }
 
+    // Game Controlled params
+    [HideInInspector] public bool isRecording = false;
+
     [Header("Main Settings")]
     [SerializeField] bool rayTracingEnabled = true;
+    [SerializeField] float timeBetweenSnapshots = 1f;
     public bool accumulate = true;
     public bool useSky;
     [SerializeField] float sunFocus = 500;
@@ -37,6 +42,7 @@ public class RayTracingManager : MonoBehaviour
     [Header("References")]
     [SerializeField] Shader rayTracingShader;
     [SerializeField] Shader accumulateShader;
+    [SerializeField] Shader composeShader;
 
     [Header("Info")]
     [SerializeField] int numAccumulatedFrames;
@@ -44,18 +50,33 @@ public class RayTracingManager : MonoBehaviour
     // Materials and render textures
     Material rayTracingMaterial;
     Material accumulateMaterial;
+    Material composeMaterial;
     RenderTexture resultTexture;
+    RenderTexture composedTexture;
+    RenderTexture frameCountTexture;
 
     // Buffers
     ComputeBuffer triangleBuffer;
     ComputeBuffer nodeBuffer;
     ComputeBuffer modelBuffer;
 
+    // Snaphots are "photos" of the real space at specific positions.
+    private readonly Dictionary<int, Snapshot> Snapshots = new();
+
     MeshInfo[] meshInfo;
     Model[] models;
     bool hasBVH;
     LocalKeyword debugVisShaderKeyword;
 
+    /// <summary>
+    /// [seconds]
+    /// </summary>
+    private float timeSinceLastSnapshot = 9999f;
+
+    private void ResetSnapshot(int i)
+    {
+        Snapshots[i].ResetRenderTexture();
+    }
 
     private void OnEnable()
     {
@@ -63,21 +84,21 @@ public class RayTracingManager : MonoBehaviour
         hasBVH = false;
     }
 
-    private void Update()
-    {
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            numAccumulatedFrames = 1;
-            Debug.Log("Reset render");
-        }
+    //private void Update()
+    //{
+    //    if (Input.GetKeyDown(KeyCode.Space))
+    //    {
+    //        numAccumulatedFrames = 1;
+    //        Debug.Log("Reset render");
+    //    }
 
-        if (Input.GetKeyDown(KeyCode.S))
-        {
-            string path = System.IO.Path.Combine(Application.persistentDataPath, "screencap_ray.png");
-            ScreenCapture.CaptureScreenshot(path);
-            Debug.Log("Screenshot: " + path);
-        }
-    }
+    //    if (Input.GetKeyDown(KeyCode.S))
+    //    {
+    //        string path = System.IO.Path.Combine(Application.persistentDataPath, "screencap_ray.png");
+    //        ScreenCapture.CaptureScreenshot(path);
+    //        Debug.Log("Screenshot: " + path);
+    //    }
+    //}
 
     // Called after any camera (e.g. game or scene camera) has finished rendering into the src texture
     void OnRenderImage(RenderTexture src, RenderTexture target)
@@ -92,7 +113,7 @@ public class RayTracingManager : MonoBehaviour
         // Debug.Log("Rendering... isscenecam = " + isSceneCam + "  " + Camera.current.name);
         if (isSceneCam)
         {
-            if (rayTracingEnabled && useSceneView)
+            if (rayTracingEnabled && useSceneView && Application.isPlaying)
             {
                 InitFrame();
                 Graphics.Blit(null, target, rayTracingMaterial);
@@ -105,33 +126,74 @@ public class RayTracingManager : MonoBehaviour
         else
         {
             Camera.current.cullingMask = rayTracingEnabled ? 0 : 2147483647;
+
             if (rayTracingEnabled && !useSceneView)
             {
                 InitFrame();
 
-                if (accumulate && visMode == VisMode.Default)
+                isRecording = Input.GetKey(KeyCode.Mouse0);
+
+                if (visMode == VisMode.Default)
                 {
-                    // Create copy of prev frame
-                    RenderTexture prevFrameCopy = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
-                    Graphics.Blit(resultTexture, prevFrameCopy);
+                    // Update timer
+                    timeSinceLastSnapshot += isRecording ? Time.deltaTime : 0f;
 
-                    // Run the ray tracing shader and draw the result to a temp texture
-                    rayTracingMaterial.SetInt("Frame", numAccumulatedFrames);
-                    RenderTexture currentFrame = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
-                    Graphics.Blit(null, currentFrame, rayTracingMaterial);
+                    // TODO: Initialize new snapshot with weight to 0.
 
-                    // Accumulate
-                    accumulateMaterial.SetInt("_Frame", numAccumulatedFrames);
-                    accumulateMaterial.SetTexture("_PrevFrame", prevFrameCopy);
-                    Graphics.Blit(currentFrame, resultTexture, accumulateMaterial);
+                    if(isRecording && timeSinceLastSnapshot >= timeBetweenSnapshots)
+                    {
+                        //Debug.Log("Time since last snapshot: " + Math.Round((decimal)timeSinceLastSnapshot, 4));
+                        // Reset timer
+                        timeSinceLastSnapshot = 0f;
 
-                    // Draw result to screen
-                    Graphics.Blit(resultTexture, target);
+                        // Create copy of prev frame
+                        RenderTexture prevFrameCopy = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
+                        Graphics.Blit(resultTexture, prevFrameCopy);
 
-                    // Release temps
-                    RenderTexture.ReleaseTemporary(prevFrameCopy);
-                    RenderTexture.ReleaseTemporary(currentFrame);
-                    numAccumulatedFrames += Application.isPlaying ? 1 : 0;
+                        // Run the ray tracing shader and draw the result to a temp texture
+                        rayTracingMaterial.SetInt("Frame", numAccumulatedFrames);
+                        RenderTexture currentFrame = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
+                        Graphics.Blit(null, currentFrame, rayTracingMaterial);
+
+                        // Accumulate
+                        //Graphics.SetRandomWriteTarget(1, frameCountTexture);
+                        accumulateMaterial.SetInt("_Frame", numAccumulatedFrames);
+                        accumulateMaterial.SetInt("_Accumulate", accumulate ? 1 : 0);
+                        accumulateMaterial.SetTexture("_PrevFrame", prevFrameCopy);
+                        Graphics.Blit(currentFrame, resultTexture, accumulateMaterial);
+                        //Graphics.ClearRandomWriteTargets();
+
+                        // Create copy for composing
+                        RenderTexture resultCopy = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
+                        Graphics.Blit(resultTexture, resultCopy);
+
+                        // Compose the final image and draw it to screen
+                        composeMaterial.SetTexture("_Snapshot01", resultTexture);
+                        Graphics.Blit(null, composedTexture, composeMaterial);
+
+                        // Draw result to screen
+                        //Graphics.Blit(resultTexture, target);
+                        Graphics.Blit(composedTexture, target);
+
+                        // Release temps
+                        RenderTexture.ReleaseTemporary(prevFrameCopy);
+                        RenderTexture.ReleaseTemporary(currentFrame);
+                        numAccumulatedFrames += Application.isPlaying ? 1 : 0;
+                    }
+                    else
+                    {
+                        // Draw result to screen
+                        //Graphics.Blit(resultTexture, target);
+                        //Graphics.Blit(composedTexture, target);
+
+                        // Compose the final image and draw it to screen
+                        composeMaterial.SetTexture("_Snapshot01", resultTexture);
+                        Graphics.Blit(null, composedTexture, composeMaterial);
+
+                        // Draw result to screen
+                        //Graphics.Blit(resultTexture, target);
+                        Graphics.Blit(composedTexture, target);
+                    }
                 }
                 else
                 {
@@ -155,7 +217,10 @@ public class RayTracingManager : MonoBehaviour
             debugVisShaderKeyword = new LocalKeyword(rayTracingShader, "DEBUG_VIS");
         }
         ShaderHelper.InitMaterial(accumulateShader, ref accumulateMaterial);
+        ShaderHelper.InitMaterial(composeShader, ref composeMaterial);
         ShaderHelper.CreateRenderTexture(ref resultTexture, Screen.width, Screen.height, FilterMode.Bilinear, ShaderHelper.RGBA_SFloat, "Result");
+        ShaderHelper.CreateRenderTexture(ref composedTexture, Screen.width, Screen.height, FilterMode.Bilinear, ShaderHelper.RGBA_SFloat, "Composed");
+        ShaderHelper.CreateFrameCountTexture(ref frameCountTexture, Screen.width, Screen.height, "FrameCount");
         models = FindObjectsOfType<Model>();
 
         if (!hasBVH)
@@ -274,7 +339,15 @@ public class RayTracingManager : MonoBehaviour
         {
             ShaderHelper.Release(triangleBuffer, nodeBuffer, modelBuffer);
             ShaderHelper.Release(resultTexture);
+            ShaderHelper.Release(composedTexture);
+            ShaderHelper.Release(frameCountTexture);
             Destroy(rayTracingMaterial);
+
+            foreach (var snapshot in Snapshots.Values)
+            {
+                // Null-safe
+                ShaderHelper.Release(snapshot.Image);
+            }
         }
     }
 

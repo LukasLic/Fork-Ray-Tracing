@@ -12,6 +12,7 @@ public static class ShaderHelper
 
     public const FilterMode defaultFilterMode = FilterMode.Bilinear;
     public const GraphicsFormat RGBA_SFloat = GraphicsFormat.R32G32B32A32_SFloat;
+    public const GraphicsFormat R_UInt = GraphicsFormat.R32_UInt;
     public const GraphicsFormat defaultGraphicsFormat = RGBA_SFloat;
 
     /// Convenience method for dispatching a compute shader.
@@ -233,6 +234,47 @@ public static class ShaderHelper
         }
 
         return false;
+    }
+
+    public static bool CreateFrameCountTexture(ref RenderTexture texture, int width, int height, string name = "Unnamed")
+    {
+        var needsRecreate =
+        texture == null ||
+        !texture.IsCreated() ||
+        texture.width != width ||
+        texture.height != height ||
+        texture.graphicsFormat != ShaderHelper.R_UInt ||
+        texture.depth != (int)DepthMode.None ||
+        texture.useMipMap != false ||
+        texture.filterMode != FilterMode.Point ||
+        texture.enableRandomWrite != true;
+
+        if (needsRecreate)
+        {
+            if (texture != null)
+            {
+                texture.Release();
+            }
+            
+            var desc = new RenderTextureDescriptor(width, height)
+            {
+                graphicsFormat = ShaderHelper.R_UInt,
+                depthBufferBits = (int)DepthMode.None,
+                msaaSamples = 1,
+                useMipMap = false,
+                autoGenerateMips = false,
+                enableRandomWrite = true,
+            };
+
+            texture = new RenderTexture(desc);
+            texture.Create();
+        }
+
+        texture.name = name;
+        texture.wrapMode = TextureWrapMode.Clamp;
+        texture.filterMode = FilterMode.Point;
+
+        return needsRecreate;
     }
 
 
