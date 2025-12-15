@@ -28,6 +28,7 @@ public class RayTracingManager : MonoBehaviour
 
     [SerializeField, Range(0, 32)] int maxBounceCount = 4;
     [SerializeField, Range(0, 64)] int numRaysPerPixel = 2;
+    [SerializeField, Range(0, 1)] float sampleChance = 1;
     [SerializeField, Min(0)] float defocusStrength = 0;
     [SerializeField, Min(0)] float divergeStrength = 0.3f;
     [SerializeField, Min(0)] float focusDistance = 1;
@@ -60,6 +61,9 @@ public class RayTracingManager : MonoBehaviour
     ComputeBuffer nodeBuffer;
     ComputeBuffer modelBuffer;
 
+    private Vector3 snapshotCamPos = Vector3.zero;
+    private Matrix4x4 snapshotViewProj = Matrix4x4.identity;
+
     // Snaphots are "photos" of the real space at specific positions.
     private readonly Dictionary<int, Snapshot> Snapshots = new();
 
@@ -82,7 +86,12 @@ public class RayTracingManager : MonoBehaviour
     {
         numAccumulatedFrames = 0;
         hasBVH = false;
-        
+
+        var cam = Camera.current;
+        if(cam == null) {
+            cam = GetComponent<Camera>();
+        }
+        cam.depthTextureMode |= DepthTextureMode.Depth;
     }
 
     private void Start()
@@ -143,7 +152,7 @@ public class RayTracingManager : MonoBehaviour
         }
         else
         {
-            Camera.current.cullingMask = rayTracingEnabled ? 0 : 2147483647;
+            //Camera.current.cullingMask = rayTracingEnabled ? 0 : 2147483647;
 
             if (rayTracingEnabled && !useSceneView)
             {
@@ -151,6 +160,15 @@ public class RayTracingManager : MonoBehaviour
 
                 // FIXME: TRUE here (to automatically record) causes visual noise!
                 isRecording = Input.GetKey(KeyCode.Mouse0) || Input.GetKeyDown(KeyCode.X);
+                if (Input.GetKeyDown(KeyCode.Mouse0))
+                {
+                    // Store snapshot data
+                    var cam = Camera.current;
+                    var proj = GL.GetGPUProjectionMatrix(cam.projectionMatrix, true);
+                    var view = cam.worldToCameraMatrix;
+                    snapshotCamPos = cam.transform.position;
+                    snapshotViewProj = proj * view;
+                }
 
                 if (visMode == VisMode.Default)
                 {
@@ -182,6 +200,41 @@ public class RayTracingManager : MonoBehaviour
                         Graphics.Blit(currentFrame, resultTexture, accumulateMaterial);
                         Graphics.ClearRandomWriteTargets();
 
+                        // #############################################################################################################
+                        // #############################################################################################################
+
+                        // Store snapshot data
+                        var cam = Camera.current;
+                        var proj = GL.GetGPUProjectionMatrix(cam.projectionMatrix, true);
+                        var view = cam.worldToCameraMatrix;
+                        snapshotCamPos = cam.transform.position;
+                        snapshotViewProj = proj * view;
+                        var snapshotCamLocalToWorld = cam.transform.localToWorldMatrix;
+
+                        var planeHeight = focusDistance * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * 2f;
+                        var planeWidth = planeHeight * cam.aspect;
+
+                        composeMaterial.SetVector("_CurViewParams", new Vector3(planeWidth, planeHeight, focusDistance));
+                        composeMaterial.SetMatrix("_CurCamLocalToWorld", cam.transform.localToWorldMatrix);
+
+                        composeMaterial.SetVector("_SnapCamPos", snapshotCamPos);
+                        composeMaterial.SetMatrix("_SnapViewProj", snapshotViewProj);
+                        composeMaterial.SetMatrix("_SnapCamLocalToWorld", snapshotCamLocalToWorld);
+
+                        composeMaterial.SetFloat("_MaxDistance", 5000f);
+                        composeMaterial.SetFloat("_DepthEps", 0.5f);
+                        composeMaterial.SetFloat("_DepthEpsRelative", 0.02f);
+
+                        composeMaterial.SetTexture("_Snapshot01", resultTexture);
+                        composeMaterial.SetTexture("_MainTex", src);
+
+                        // current view goes in as _MainTex
+                        Graphics.Blit(src, composedTexture, composeMaterial);
+                        Graphics.Blit(composedTexture, target);
+
+                        // #############################################################################################################
+                        // #############################################################################################################
+                        /*
                         //// Create copy for composing
                         //RenderTexture resultCopy = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
                         //Graphics.Blit(resultTexture, resultCopy);
@@ -193,15 +246,55 @@ public class RayTracingManager : MonoBehaviour
                         // Draw result to screen
                         //Graphics.Blit(resultTexture, target);
                         Graphics.Blit(composedTexture, target);
+                        */
+                        // #############################################################################################################
+                        // #############################################################################################################
+                        Graphics.Blit(resultTexture, target);
 
                         // Release temps
                         RenderTexture.ReleaseTemporary(prevFrameCopy);
                         RenderTexture.ReleaseTemporary(currentFrame);
                         //RenderTexture.ReleaseTemporary(resultCopy);
+
                         numAccumulatedFrames += Application.isPlaying ? 1 : 0;
                     }
                     else
                     {
+                        //var cam = Camera.current;
+                        //var planeHeight = focusDistance * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * 2f;
+                        //var planeWidth = planeHeight * cam.aspect;
+
+                        //composeMaterial.SetVector("_CurViewParams", new Vector3(planeWidth, planeHeight, focusDistance));
+                        //composeMaterial.SetMatrix("_CurCamLocalToWorld", cam.transform.localToWorldMatrix);
+
+                        //composeMaterial.SetVector("_SnapCamPos", snapshotCamPos);
+                        //composeMaterial.SetMatrix("_SnapViewProj", snapshotViewProj);
+
+                        //composeMaterial.SetFloat("_MaxDistance", 5000f);
+                        //composeMaterial.SetFloat("_DepthEps", 0.5f);
+                        //composeMaterial.SetFloat("_DepthEpsRelative", 0.02f);
+
+                        //composeMaterial.SetTexture("_Snapshot01", resultTexture);
+                        //composeMaterial.SetTexture("_MainTex", src);
+
+                        //// current view goes in as _MainTex
+                        //Graphics.Blit(src, composedTexture, composeMaterial);
+                        //Graphics.Blit(composedTexture, target);
+
+                        rayTracingMaterial.SetInt("rayPosOnly", 1);
+                        rayTracingMaterial.SetVector("_SnapCamPos", snapshotCamPos);
+                        rayTracingMaterial.SetMatrix("_SnapViewProj", snapshotViewProj);
+                        rayTracingMaterial.SetTexture("_Snapshot01", resultTexture);
+
+                        RenderTexture currentFrame = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
+                        Graphics.Blit(null, currentFrame, rayTracingMaterial);
+
+                        Graphics.Blit(currentFrame, target);
+
+                        RenderTexture.ReleaseTemporary(currentFrame);
+                        // #############################################################################################################
+                        // #############################################################################################################
+                        /*
                         // Draw result to screen
                         //Graphics.Blit(resultTexture, target);
                         //Graphics.Blit(composedTexture, target);
@@ -213,6 +306,7 @@ public class RayTracingManager : MonoBehaviour
                         // Draw result to screen
                         //Graphics.Blit(resultTexture, target);
                         Graphics.Blit(composedTexture, target);
+                        */
                     }
                 }
                 else
@@ -296,12 +390,15 @@ public class RayTracingManager : MonoBehaviour
 
         rayTracingMaterial.SetInt("MaxBounceCount", maxBounceCount);
         rayTracingMaterial.SetInt("NumRaysPerPixel", numRaysPerPixel);
+        rayTracingMaterial.SetFloat("SampleChance", sampleChance);
         rayTracingMaterial.SetFloat("DefocusStrength", defocusStrength);
         rayTracingMaterial.SetFloat("DivergeStrength", divergeStrength);
 
         rayTracingMaterial.SetFloat("SunFocus", sunFocus);
         rayTracingMaterial.SetFloat("SunIntensity", sunIntensity);
         rayTracingMaterial.SetColor("SunColour", sunColor);
+
+        rayTracingMaterial.SetInt("rayPosOnly", 0);
     }
 
     void UpdateCameraParams(Camera cam)

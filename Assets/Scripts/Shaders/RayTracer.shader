@@ -42,6 +42,7 @@ Shader "Custom/RayTracer"
 			int MaxBounceCount;
 			int NumRaysPerPixel;
 			int Frame;
+			float SampleChance;
 
 			// Camera settings
 			float DefocusStrength;
@@ -58,6 +59,13 @@ Shader "Custom/RayTracer"
 			// Debug settings
 			int visMode;
 			float debugVisScale;
+
+			// Alt. Mode Settings
+			int rayPosOnly;
+			sampler2D _Snapshot01;
+			float4x4 _SnapViewProj;
+			float4x4 _SnapCamLocalToWorld;
+			float3 _SnapCamPos;
 
 			// --- Structures ---
 			struct Ray
@@ -175,17 +183,20 @@ Shader "Custom/RayTracer"
 			float3 GetEnvironmentLight(float3 dir)
 			{
 				if (UseSky == 0) return 0;
-				const float3 GroundColour = float3(0.35, 0.3, 0.35);
+				const float3 GroundColour = float3(0.35, 0.3, 0.35); // TODO: Make adjustable
 				const float3 SkyColourHorizon = float3(1, 1, 1);
 				const float3 SkyColourZenith = float3(0.08, 0.37, 0.73);
 				
-
+				// Combine ground, sky
 				float skyGradientT = pow(smoothstep(0, 0.4, dir.y), 0.35);
 				float groundToSkyT = smoothstep(-0.01, 0, dir.y);
 				float3 skyGradient = lerp(SkyColourHorizon, SkyColourZenith, skyGradientT);
+				float3 composite = lerp(GroundColour, skyGradient, groundToSkyT);
+
+				// Add sun light
 				float sun = pow(max(0, dot(dir, _WorldSpaceLightPos0.xyz)), SunFocus) * SunIntensity; // TODO
-				// Combine ground, sky, and sun
-				float3 composite = lerp(GroundColour, skyGradient, groundToSkyT);//; + sun * SunColour * (groundToSkyT >= 1);
+				// composite +=  sun * SunColour * (groundToSkyT >= 1); // TODO
+
 				return composite;
 			}
 
@@ -301,7 +312,8 @@ Shader "Custom/RayTracer"
 				stats = 0;
 				ModelHitInfo result;
 				result.didHit = false;
-				result.dst = 1.#INF;
+				// result.dst = 1.#INF;
+				result.dst = MAX_DISTANCE;
 				result.hitPoint = 0;
 				result.normal = 0;
 				Ray localRay;
@@ -400,7 +412,6 @@ Shader "Custom/RayTracer"
 
 						// Offset to avoid self-hit speckles
 						rayOrigin = hitInfo.hitPoint + hitInfo.normal * 1e-4;
-
 
 						// HERE
 						// ---------------------------------------------------------------------------------
@@ -501,6 +512,145 @@ Shader "Custom/RayTracer"
 				return float3(1, 0, 1); // Invalid test mode
 			}
 
+			// ###########################################################################
+			// ###########################################################################
+			// ###########################################################################
+
+			bool HitWorldPos(float3 rayOrigin, float3 rayDir, out float3 worldPos)
+			{
+				int2 stats; // num triangle tests, num bounding box tests
+				Ray ray;
+				ray.origin = rayOrigin;
+				ray.dir = rayDir;
+				ModelHitInfo hitInfo = CalculateRayCollision(ray, 0, stats);
+
+				// No hit, return black
+				if(hitInfo.didHit == false)
+				{
+					// worldPos = float3(0.0, 0.0, 0.0);
+
+					worldPos = _WorldSpaceCameraPos + rayDir * MAX_DISTANCE;
+					return false;
+
+					// float3 maxPos = _WorldSpaceCameraPos + rayDir * MAX_DISTANCE;
+					// return float4(maxPos, 1.0);
+				}
+
+				worldPos = hitInfo.hitPoint;
+				return true;
+			}
+
+			bool WorldToSnapshotUV(float3 worldPos, out float2 snapUV)
+			{
+				float4 clip = mul(_SnapViewProj, float4(worldPos, 1.0));
+
+				// Behind snapshot camera
+				if (clip.w <= 0.0)
+				{
+					snapUV = 0;
+					return false;
+				}
+
+				float2 ndc = clip.xy / clip.w;          // -1..1
+				snapUV = ndc * 0.5 + 0.5;               // 0..1
+
+				// Outside snapshot image
+				if (snapUV.x < 0.0 || snapUV.x > 1.0 || snapUV.y < 0.0 || snapUV.y > 1.0)
+					return false;
+
+				return true;
+			}
+
+			bool SnapshotMatchesPoint(float3 worldPos, float4 snap)
+			{
+				float _DepthEps = 0.15; // eg 0.05
+
+				float snapDist = snap.a;
+
+				// Snapshot had no hit there
+				if (snapDist >= MAX_DISTANCE - 1e-3)
+					return false;
+
+				float expected = length(worldPos - _SnapCamPos);
+
+				return abs(expected - snapDist) <= _DepthEps;
+			}
+
+			float3 SnapPrimaryRayDirWS(float2 snapUV)
+			{
+				float3 viewPlaneLocal = float3(snapUV - 0.5, 1.0) * ViewParams;
+				float3 viewPlaneWorld = mul(_SnapCamLocalToWorld, float4(viewPlaneLocal, 1.0)).xyz;
+				return normalize(viewPlaneWorld - _SnapCamPos);
+			}
+
+			// Returns false if the snapshot had no hit at that UV
+			bool SnapUVToWorldPos(float2 snapUV, out float3 worldPos, out float4 snapSample)
+			{
+				snapSample = tex2D(_Snapshot01, snapUV);
+				float dist = snapSample.a;
+
+				if (dist >= MAX_DISTANCE - 1e-3)
+				{
+					worldPos = 0;
+					return false;
+				}
+
+				float3 dirWS = SnapPrimaryRayDirWS(snapUV);
+				worldPos = _SnapCamPos + dirWS * dist;
+				return true;
+			}
+
+			float3 RunFinalCompose(float3 camPos, float3 focusPoint, v2f i)
+			{
+				return tex2D(_Snapshot01, i.uv).rgb;
+
+				float3 rayDir = normalize(focusPoint - camPos);
+				float3 worldPos;
+				bool isHit = HitWorldPos(camPos, rayDir, worldPos);
+
+				// // [unroll(999)]
+				// for (int i = 0; i < 20; i++)
+				// {
+				// 	for (int j = 0; j < 20; j++)
+				// 	{
+				// 		float2 uv = float2(i, j) / float2(1000, 1000);
+				// 		float4 s = tex2D(_Snapshot01, uv);
+
+				// 		float3 snapWorldPos;
+				// 		float4 snap;
+				// 		if (SnapUVToWorldPos(uv, snapWorldPos, snap))
+				// 		{
+				// 			// snapWorldPos is the reconstructed hit position in world space
+				// 			// snap.rgb is the snapshot color at that hit
+				// 			if (length(snapWorldPos - worldPos) < 1)
+				// 			{
+				// 				return snap.rgb;
+				// 			}
+				// 		}
+				// 	}
+				// }
+
+				// float2 snapUV;
+				// if(WorldToSnapshotUV(worldPos, snapUV))
+				// {
+				// 	// snap.rgb = color
+				// 	// snap.a = distance (from snapshot camera)
+				// 	float4 snap = tex2D(_Snapshot01, snapUV);
+
+				// 	if(SnapshotMatchesPoint(worldPos, snap))
+				// 	{
+				// 		// If the snapshot matches the world position, use it
+				// 		return snap.rgb;
+				// 	}
+				// }
+
+				return float3(1.0, 0.0, 0.0);
+			}
+
+			// ###########################################################################
+			// ###########################################################################
+			// ###########################################################################
+
 
 			// Run for every pixel in the display
 			float4 frag(v2f i) : SV_Target
@@ -521,14 +671,25 @@ Shader "Custom/RayTracer"
 				#if DEBUG_VIS
 					return float4(TraceDebugMode(_WorldSpaceCameraPos, normalize(focusPoint - _WorldSpaceCameraPos)), 1);
 				#endif
+
+				// ############################################################################
+				// ############################################################################
+
+				if(rayPosOnly == 1)
+				{
+					return float4(RunFinalCompose(_WorldSpaceCameraPos, focusPoint, i), 1.0);
+				}
 				
+				// ############################################################################
+				// ############################################################################
+
 				// Trace multiple rays and average together
 				float3 totalIncomingLight = 0;
 				// Distance averaging
 				float distSum = 0.0;
 				int distCount = 0;
 
-				if(RandomValue(rngState) > 1.01f) // TODO: Configurable
+				if(RandomValue(rngState) > SampleChance)
 				{
 					return float4(0,0,0, 0);
 				}
