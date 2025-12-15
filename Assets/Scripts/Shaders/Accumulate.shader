@@ -14,6 +14,11 @@ Shader "Hidden/Accumulate"
 			#pragma vertex vert
 			#pragma fragment frag
 
+			// DX11 shader model 5.0.
+			// Not supported on DX11 before SM5.0, OpenGL before 4.3 (i.e. Mac), OpenGL ES 2.0/3.0/3.1, Metal.
+			// Supported on DX11+ SM5.0, OpenGL 4.3+, OpenGL ES 3.1+AEP, Vulkan, Metal (without geometry), PS4/XB1 consoles.
+			#pragma target 5.0
+
 			#include "UnityCG.cginc"
 
 			struct appdata
@@ -36,7 +41,7 @@ Shader "Hidden/Accumulate"
 				return o;
 			}
 
-			// RWTexture2D<uint> _FrameCountUAV : register(u1);
+			RWTexture2D<uint> _FrameCountUAV : register(u1);
 
 			sampler2D _MainTex;
 			sampler2D _PrevFrame;
@@ -66,34 +71,50 @@ Shader "Hidden/Accumulate"
 					// ...and previous frame was also not a hit, return a debug color (red).
 					if(colPrev.a == 0)
 					{
-						return float4(1,0,0, 0); // Debug red for no hit yet.
-						// return float4(0,0,0, 0);
+						//return float4(1,0,0, 0); // Debug red for no hit yet.
+						return float4(0,0,0, 0);
 					}
 					// ...else return previous frame color (don't update by misses).
 					else
 					{
-						colPrev;
+						return colPrev;
 					}
 				}
+
+				// Get the pixel for the _FrameCountUAV access.
+				uint2 size = (uint2)_ScreenParams.xy;
+				uint2 pix = (uint2)(i.uv * size);
+				pix = min(pix, size - 1);
 
 				// If this is the first valid hit frame, throw away the previous debug red.
 				if(colPrev.a == 0)
 				{
+					uint _oldValue;
+					InterlockedExchange(_FrameCountUAV[pix], 1u, _oldValue); // Set frame count to 1.
 					return col;
 				}
 
+				// uint _frame = _Frame;
 				// FIXME: Make one distance texture and one RGB texture, where Alpha is the next image weight.
 				// This will fix, the behaviour where the random chance picks a color, but too late, so the weight is negligible.
-
-				// float dst = col.a;
-				// float dstPrev = colPrev.a;
-
-				float weight = 1.0 / (_Frame + 1);
-				// Combine prev frame with current frame. Weight the contributions to result in an average over all frames.
-				float4 accumulatedCol = saturate(colPrev * (1 - weight) + col * weight); // Saturate to avoid HDR issues (for ex. too bright sun).
-				//float4 accumulatedCol = colPrev * (1 - weight) + col * weight;
 				
-				//accumulatedCol.a = dst * weight + dstPrev * (1 - weight); // Accumulate distance in alpha channel.
+				uint _frame = 1;
+				InterlockedAdd(_FrameCountUAV[pix], 1, _frame);
+				
+				float p = 3;
+				float weight = (p + 1) / (p + _frame);
+
+				// Combine prev frame with current frame. Weight the contributions to result in an average over all frames.
+				// If weight is 1, only current frame is used.
+				// As the weight decreses, previous frames contribute more.
+				float4 accumulatedCol = saturate(colPrev * (1 - weight) + col * weight); // Saturate to avoid HDR issues (for ex. too bright sun).
+				
+				// Also accumulate distance in alpha channel.
+				// Be careful, as the value ranges my be extreme, causing issues later in the pipeline.
+				accumulatedCol.a = colPrev.a * (1 - weight) + col.a * weight;
+
+				// // Debug
+				// accumulatedCol.a = (float)_frame;
 
 				return accumulatedCol;
 			}

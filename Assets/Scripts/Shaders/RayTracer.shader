@@ -345,6 +345,24 @@ Shader "Custom/RayTracer"
 				return x - y * floor(x / y);
 			}
 
+			float3 CosineSampleHemisphere(float3 n, inout uint rngState)
+			{
+				float r1 = RandomValue(rngState);
+				float r2 = RandomValue(rngState);
+
+				float phi = 2 * PI * r1;
+				float r = sqrt(r2);
+
+				float x = r * cos(phi);
+				float y = r * sin(phi);
+				float z = sqrt(1 - r2);
+
+				float3 t = normalize(abs(n.z) < 0.999 ? cross(n, float3(0,0,1)) : cross(n, float3(0,1,0)));
+				float3 b = cross(t, n);
+
+				return normalize(t * x + b * y + n * z);
+			}
+
 			float3 Trace(float3 rayOrigin, float3 rayDir, inout uint rngState, out float firstRayDst)
 			{
 				firstRayDst = NO_HIT;
@@ -382,6 +400,44 @@ Shader "Custom/RayTracer"
 
 						// Offset to avoid self-hit speckles
 						rayOrigin = hitInfo.hitPoint + hitInfo.normal * 1e-4;
+
+
+						// HERE
+						// ---------------------------------------------------------------------------------
+						// // Do a sun check
+						// // float3 sunDir = normalize(_WorldSpaceLightPos0.xyz); // Directional sun direction
+						// // float nDotL = max(0.0, dot(hitInfo.normal, sunDir));
+						// // ---------------------------------------------------------------------------------
+						// // Do a sun check
+						// float3 sunAxis = normalize(_WorldSpaceLightPos0.xyz); // CHANGED: axis of the sun cone
+						// // Derive a small cone from SunFocus (tweak if needed)
+						// float cosThetaMax = pow(0.5, 1.0 / max(SunFocus, 1.0)); // CHANGED
+						// float3 sunDir = SampleCone(sunAxis, cosThetaMax, rngState); // CHANGED: jittered sun direction
+						// float nDotL = max(0.0, dot(hitInfo.normal, sunDir)); // CHANGED: use jittered dir
+
+						// if (nDotL > 0.0)
+						// {
+						// 	Ray shadowRay;
+						// 	shadowRay.origin = rayOrigin;
+						// 	shadowRay.dir = sunDir;
+						// 	shadowRay.invDir = 1.0 / shadowRay.dir;
+
+						// 	int2 sunStats;
+						// 	ModelHitInfo occ = CalculateRayCollision(shadowRay, bounceIndex + 1, sunStats);
+
+						// 	if (!occ.didHit)
+						// 	{
+						// 		// Original / Option A: treat sun as directional/area light (stable energy)
+						// 		// incomingLight += rayColour * (SunColour * SunIntensity) * nDotL; // CHANGED
+
+						// 		// Option B: keep your "sun lobe" look (more variance, but matches your SunFocus idea)
+						// 		float sun = pow(max(0.0, dot(sunDir, sunAxis)), SunFocus) * SunIntensity; // CHANGED
+						// 		incomingLight += rayColour * (SunColour * sun) * nDotL; // CHANGED
+						// 	}
+						// }
+
+						// float3 diffuseDir = CosineSampleHemisphere(hitInfo.normal, rngState);
+						// ---------------------------------------------------------------------------------
 
 						float3 diffuseDir = normalize(hitInfo.normal + RandomDirection(rngState));
 						float3 specularDir = reflect(rayDir, hitInfo.normal);
@@ -472,7 +528,7 @@ Shader "Custom/RayTracer"
 				float distSum = 0.0;
 				int distCount = 0;
 
-				if(RandomValue(rngState) > 0.05f) // TODO: Configurable
+				if(RandomValue(rngState) > 1.01f) // TODO: Configurable
 				{
 					return float4(0,0,0, 0);
 				}
@@ -482,11 +538,17 @@ Shader "Custom/RayTracer"
 					// -- Calculate ray origin and direction --
 					// Jitter the starting point of the ray. This allows for a depth of field effect.
 					float2 defocusJitter = RandomPointInCircle(rngState) * DefocusStrength / numPixels.x;
+					// Disable jitter on the first ray to improve distance sampling accuracy.
+					defocusJitter = rayIndex == 0 ? 0 : defocusJitter;
+
 					float3 rayOrigin = _WorldSpaceCameraPos + camRight * defocusJitter.x + camUp * defocusJitter.y;
 
 					// Jitter the focus point when calculating the ray direction to allow for blurring the image
 					// (at low strengths, this can be used for anti-aliasing)
 					float2 jitter = RandomPointInCircle(rngState) * DivergeStrength / numPixels.x;
+					// Disable jitter on the first ray to improve distance sampling accuracy.
+					jitter = rayIndex == 0 ? 0 : jitter;
+
 					float3 jitteredFocusPoint = focusPoint + camRight * jitter.x + camUp * jitter.y;
 					float3 rayDir = normalize(jitteredFocusPoint - rayOrigin);
 
@@ -495,7 +557,7 @@ Shader "Custom/RayTracer"
 					totalIncomingLight += Trace(rayOrigin, rayDir, rngState, sampleDist);
 
 					// Update distance sum/count
-					if (sampleDist > NO_HIT) // Only count real geometry hits
+					if (rayIndex == 0 && sampleDist > NO_HIT) // Only count real geometry hits
 					{
 						distSum += sampleDist;
 						distCount++;

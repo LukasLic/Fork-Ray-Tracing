@@ -254,6 +254,7 @@ public static class ShaderHelper
             if (texture != null)
             {
                 texture.Release();
+                UnityEngine.Object.Destroy(texture);
             }
             
             var desc = new RenderTextureDescriptor(width, height)
@@ -266,13 +267,14 @@ public static class ShaderHelper
                 enableRandomWrite = true,
             };
 
-            texture = new RenderTexture(desc);
+            texture = new RenderTexture(desc)
+            {
+                name = name,
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Point,
+            };
             texture.Create();
         }
-
-        texture.name = name;
-        texture.wrapMode = TextureWrapMode.Clamp;
-        texture.filterMode = FilterMode.Point;
 
         return needsRecreate;
     }

@@ -6,9 +6,9 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 0
-    path: Assets/Scenes/Raytracing.unity
-    guid: bb1ae8763b3a1fb4ca081bcbae2a973d
-  - enabled: 1
-    path: Assets/Scenes/Vid/Vis/GPU stall recreation.unity
-    guid: c8727b5531017e743bb94fb638b86689
+    path: 
+    guid: 00000000000000000000000000000000
+  - enabled: 0
+    path: 
+    guid: 00000000000000000000000000000000
   m_configObjects: {}

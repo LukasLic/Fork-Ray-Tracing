@@ -47,7 +47,11 @@ Shader "Hidden/Compose"
 				// TODO: Compose the snapshots together as needed.
 				final = s01.rgb;
 
-				return float4(saturate(final), 0);
+				// float f = saturate(s01.a / 200.0f);
+				// final = float3(f, f, f);
+				// final = float3(0, f, 0);
+
+				return float4(saturate(final), 1);
 			}
 			ENDCG
 		}
