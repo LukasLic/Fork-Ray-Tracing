@@ -18,6 +18,11 @@ public class RayTracingManager : MonoBehaviour
     // Game Controlled params
     [HideInInspector] public bool isRecording = false;
 
+    [Header("Final Renderers")]
+    [SerializeField] private SnapshotCloudRenderer cloudRenderer;
+    private Matrix4x4 snapshotCamLocalToWorld = Matrix4x4.identity;
+    private Vector3 snapshotViewParams = Vector3.one;
+
     [Header("Main Settings")]
     [SerializeField] bool rayTracingEnabled = true;
     [SerializeField] float timeBetweenSnapshots = 1f;
@@ -171,6 +176,11 @@ public class RayTracingManager : MonoBehaviour
                 isRecording = Input.GetKey(KeyCode.Mouse0) || Input.GetKeyDown(KeyCode.X);
                 if (Input.GetKeyDown(KeyCode.Mouse0))
                 {
+                    timeSinceLastSnapshot = 0;
+                    RenderTexture empty = RenderTexture.GetTemporary(_width, _height, 0, ShaderHelper.RGBA_SFloat);
+                    Graphics.Blit(empty, resultTexture);
+                    RenderTexture.ReleaseTemporary(empty);
+
                     // Store snapshot data
                     var cam = _camera;
                     var proj = GL.GetGPUProjectionMatrix(cam.projectionMatrix, true);
@@ -267,6 +277,17 @@ public class RayTracingManager : MonoBehaviour
                         //RenderTexture.ReleaseTemporary(resultCopy);
 
                         numAccumulatedFrames += Application.isPlaying ? 1 : 0;
+
+                        // #############################################################################################################
+                        snapshotCamPos = _camera.transform.position;
+                        snapshotCamLocalToWorld = _camera.transform.localToWorldMatrix;
+                        snapshotViewParams = new Vector3(planeWidth, planeHeight, focusDistance);
+
+                        if (cloudRenderer != null)
+                        {
+                            cloudRenderer.SetSnapshot(resultTexture, snapshotCamPos, snapshotCamLocalToWorld, snapshotViewParams, 5000f);
+                        }
+                        // #############################################################################################################
                     }
                     else
                     {
