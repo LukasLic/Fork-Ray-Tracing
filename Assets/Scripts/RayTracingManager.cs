@@ -179,6 +179,7 @@ public class RayTracingManager : MonoBehaviour
                     timeSinceLastSnapshot = 0;
                     RenderTexture empty = RenderTexture.GetTemporary(_width, _height, 0, ShaderHelper.RGBA_SFloat);
                     Graphics.Blit(empty, resultTexture);
+
                     RenderTexture.ReleaseTemporary(empty);
 
                     // Store snapshot data

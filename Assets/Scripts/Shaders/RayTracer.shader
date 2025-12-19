@@ -179,18 +179,52 @@ Shader "Custom/RayTracer"
 				return pointOnCircle * sqrt(RandomValue(rngState));
 			}
 
+			// Build an orthonormal basis (tangent, bitangent) from a unit normal n.
+			// Frisvad 2012, branchless and no normalize needed if n is normalized.
+			void BuildONB_Frisvad(float3 n, out float3 t, out float3 b)
+			{
+				float sign_ = (n.z >= 0.0) ? 1.0 : -1.0;
+				float a = -1.0 / (sign_ + n.z);
+				float bxy = n.x * n.y * a;
+
+				t = float3(1.0 + sign_ * n.x * n.x * a, sign_ * bxy, -sign_ * n.x);
+				b = float3(bxy, sign_ + n.y * n.y * a, -n.y);
+			}
+
+			// Cosine-weighted hemisphere sample around normal n (n must be normalized)
+			float3 CosineSampleHemisphereFast(float3 n, inout uint rngState)
+			{
+				float u1 = RandomValue(rngState);
+				float u2 = RandomValue(rngState);
+
+				float phi = 2.0 * PI * u1;
+
+				float s, c;
+				sincos(phi, s, c);
+
+				float r = sqrt(u2);
+				float x = r * c;
+				float y = r * s;
+				float z = sqrt(1.0 - u2);
+
+				float3 t, b;
+				BuildONB_Frisvad(n, t, b);
+
+				return t * x + b * y + n * z;
+			}
+
 			// Crude sky colour function for background light
 			float3 GetEnvironmentLight(float3 dir)
 			{
 				if (UseSky == 0) return 0;
-				const float3 GroundColour = float3(0.35, 0.3, 0.35); // TODO: Make adjustable
-				const float3 SkyColourHorizon = float3(1, 1, 1);
-				const float3 SkyColourZenith = float3(0.08, 0.37, 0.73);
+				const float3 GroundColour = float3(0.35, 0.35, 0.35); // TODO: Make adjustable
+				const float3 SkyColourHorizon = float3(1, 1, 1) * SunIntensity; // TODO: Temporary "sun"
+				const float3 SkyColourZenith = float3(0.08, 0.37, 0.73) * sqrt(SunIntensity);
 				
 				// Combine ground, sky
 				float skyGradientT = pow(smoothstep(0, 0.4, dir.y), 0.35);
 				float groundToSkyT = smoothstep(-0.01, 0, dir.y);
-				float3 skyGradient = lerp(SkyColourHorizon, SkyColourZenith, skyGradientT);
+				float3 skyGradient = lerp(SkyColourHorizon, SkyColourZenith, skyGradientT) * SunColour;
 				float3 composite = lerp(GroundColour, skyGradient, groundToSkyT);
 
 				// Add sun light
@@ -450,7 +484,11 @@ Shader "Custom/RayTracer"
 						// float3 diffuseDir = CosineSampleHemisphere(hitInfo.normal, rngState);
 						// ---------------------------------------------------------------------------------
 
-						float3 diffuseDir = normalize(hitInfo.normal + RandomDirection(rngState));
+						// ---------------------------------------------------------------------------------
+						// float3 diffuseDir = normalize(hitInfo.normal + RandomDirection(rngState));
+						float3 diffuseDir = CosineSampleHemisphereFast(hitInfo.normal, rngState); // TODO: This should be a bit quicker
+						// ---------------------------------------------------------------------------------
+
 						float3 specularDir = reflect(rayDir, hitInfo.normal);
 						rayDir = normalize(lerp(diffuseDir, specularDir, material.smoothness * isSpecularBounce));
 
