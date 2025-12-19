@@ -43,6 +43,8 @@ Shader "Custom/RayTracer"
 			int NumRaysPerPixel;
 			int Frame;
 			float SampleChance;
+			int UseRaytracingMask;
+			sampler2D _RTMask;
 
 			// Camera settings
 			float DefocusStrength;
@@ -730,6 +732,16 @@ Shader "Custom/RayTracer"
 				if(RandomValue(rngState) > SampleChance)
 				{
 					return float4(0,0,0, 0);
+				}
+
+				if(UseRaytracingMask == 1)
+				{
+					// Sample the mask texture to see if we should trace this pixel
+					float maskValue = tex2D(_RTMask, i.uv).r;
+					if(maskValue > 0.001)
+					{
+						return float4(0,0,0, 0);
+					}
 				}
 
 				for (int rayIndex = 0; rayIndex < NumRaysPerPixel; rayIndex++)

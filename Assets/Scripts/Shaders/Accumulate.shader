@@ -96,7 +96,7 @@ Shader "Hidden/Accumulate"
 
 				// uint _frame = _Frame;
 				// FIXME: Make one distance texture and one RGB texture, where Alpha is the next image weight.
-				// This will fix, the behaviour where the random chance picks a color, but too late, so the weight is negligible.
+				// This will fix, the behaviour where the random chance picks a color, but picks it too late, so the weight is negligible.
 				
 				uint _frame = 1;
 				InterlockedAdd(_FrameCountUAV[pix], 1, _frame);

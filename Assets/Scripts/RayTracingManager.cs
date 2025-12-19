@@ -15,8 +15,13 @@ public class RayTracingManager : MonoBehaviour
         Normal = 4
     }
 
+    private bool initialized = false;
+
     // Game Controlled params
     [HideInInspector] public bool isRecording = false;
+
+    [Header("Control")]
+    [SerializeField] bool alwaysRecord = false;
 
     [Header("Final Renderers")]
     [SerializeField] private SnapshotCloudRenderer cloudRenderer;
@@ -38,6 +43,17 @@ public class RayTracingManager : MonoBehaviour
     [SerializeField, Min(0)] float defocusStrength = 0;
     [SerializeField, Min(0)] float divergeStrength = 0.3f;
     [SerializeField, Min(0)] float focusDistance = 1;
+
+    [Header("Mask Settings")]
+    [SerializeField] bool useRaytracingMask;
+    [SerializeField] Texture raytracingMask;
+    [SerializeField] GameObject MaskGui;
+
+    [Header("Denoiser Settings")]
+    [SerializeField] bool useDenoiser;
+    [SerializeField, Range(0.01f, 1f)] float denoiserSigmaColor = 0.15f;
+    [SerializeField] float denoiserSigmaDist = 0.10f;
+    [SerializeField] float denoiserSigmaDistScale = 0.08f;
 
     [Header("Debug Settings")]
     [SerializeField] VisMode visMode;
@@ -142,6 +158,8 @@ public class RayTracingManager : MonoBehaviour
     {
         numAccumulatedFrames = Mathf.Max(1, numAccumulatedFrames);
 
+        MaskGui.SetActive(useRaytracingMask && raytracingMask != null);
+
         //if (!Application.isPlaying || Camera.current.name == "SceneCamera")
         //{
         //    Graphics.Blit(src, target); // Draw the unaltered camera render to the screen
@@ -173,7 +191,7 @@ public class RayTracingManager : MonoBehaviour
                 InitFrame();
 
                 // FIXME: TRUE here (to automatically record) causes visual noise!
-                isRecording = Input.GetKey(KeyCode.Mouse0) || Input.GetKeyDown(KeyCode.X);
+                isRecording = Input.GetKey(KeyCode.Mouse0) || Input.GetKeyDown(KeyCode.X) || (alwaysRecord && initialized);
                 if (Input.GetKeyDown(KeyCode.Mouse0))
                 {
                     timeSinceLastSnapshot = 0;
@@ -197,7 +215,7 @@ public class RayTracingManager : MonoBehaviour
 
                     // TODO: Initialize new snapshot with weight to 0.
 
-                    if (isRecording && timeSinceLastSnapshot >= timeBetweenSnapshots)
+                    if (isRecording && (timeSinceLastSnapshot >= timeBetweenSnapshots || timeBetweenSnapshots == 0f))
                     {
                         //Debug.Log("Time since last snapshot: " + Math.Round((decimal)timeSinceLastSnapshot, 4));
                         // Reset timer
@@ -207,8 +225,17 @@ public class RayTracingManager : MonoBehaviour
                         RenderTexture prevFrameCopy = RenderTexture.GetTemporary(_width, _height, 0, ShaderHelper.RGBA_SFloat);
                         Graphics.Blit(resultTexture, prevFrameCopy);
 
-                        // Run the ray tracing shader and draw the result to a temp texture
+                        
+                        float planeHeight = focusDistance * Mathf.Tan(_camera.fieldOfView * 0.5f * Mathf.Deg2Rad) * 2;
+                        float planeWidth = planeHeight * _camera.aspect;
+                        rayTracingMaterial.SetVector("ViewParams", new Vector3(planeWidth, planeHeight, focusDistance));
+                        rayTracingMaterial.SetMatrix("CamLocalToWorldMatrix", _camera.transform.localToWorldMatrix);
+
                         rayTracingMaterial.SetInt("Frame", numAccumulatedFrames);
+                        rayTracingMaterial.SetInt("UseRaytracingMask", useRaytracingMask && raytracingMask != null ? 1 : 0);
+                        rayTracingMaterial.SetTexture("_RTMask", raytracingMask);
+
+                        // Run the ray tracing shader and draw the result to a temp texture
                         RenderTexture currentFrame = RenderTexture.GetTemporary(_width, _height, 0, ShaderHelper.RGBA_SFloat);
                         Graphics.Blit(null, currentFrame, rayTracingMaterial);
 
@@ -231,9 +258,6 @@ public class RayTracingManager : MonoBehaviour
                         snapshotViewProj = proj * view;
                         var snapshotCamLocalToWorld = cam.transform.localToWorldMatrix;
 
-                        var planeHeight = focusDistance * Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad) * 2f;
-                        var planeWidth = planeHeight * cam.aspect;
-
                         composeMaterial.SetVector("_CurViewParams", new Vector3(planeWidth, planeHeight, focusDistance));
                         composeMaterial.SetMatrix("_CurCamLocalToWorld", cam.transform.localToWorldMatrix);
 
@@ -244,6 +268,11 @@ public class RayTracingManager : MonoBehaviour
                         composeMaterial.SetFloat("_MaxDistance", 5000f);
                         composeMaterial.SetFloat("_DepthEps", 0.5f);
                         composeMaterial.SetFloat("_DepthEpsRelative", 0.02f);
+
+                        composeMaterial.SetInt("_Smooth", useDenoiser ? 1 : 0);
+                        composeMaterial.SetFloat("_sigmaColor", denoiserSigmaColor);
+                        composeMaterial.SetFloat("_sigmaDist", denoiserSigmaDist);
+                        composeMaterial.SetFloat("_sigmaDistScale", denoiserSigmaDistScale);
 
                         composeMaterial.SetTexture("_Snapshot01", resultTexture);
                         //composeMaterial.SetTexture("_MainTex", src); // TEMPORARILY COMMENTED OUT
@@ -398,7 +427,7 @@ public class RayTracingManager : MonoBehaviour
                 InitFrame();
 
                 // FIXME: TRUE here (to automatically record) causes visual noise!
-                isRecording = Input.GetKey(KeyCode.Mouse0) || Input.GetKeyDown(KeyCode.X);
+                isRecording = Input.GetKey(KeyCode.Mouse0) || Input.GetKeyDown(KeyCode.X) || (alwaysRecord && initialized);
 
                 if (visMode == VisMode.Default)
                 {
@@ -422,6 +451,8 @@ public class RayTracingManager : MonoBehaviour
                 //Graphics.Blit(src, target); // Draw the unaltered camera render to the screen
             }
         }
+
+        initialized = true;
     }
 
     void InitFrame()

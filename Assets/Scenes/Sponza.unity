@@ -2512,7 +2512,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!224 &1855699392
 RectTransform:
   m_ObjectHideFlags: 0
@@ -2795,14 +2795,14 @@ Transform:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1930998682}
-  m_LocalRotation: {x: -0.103313796, y: 0.6746005, z: 0.09619007, w: 0.72456056}
-  m_LocalPosition: {x: -4.64, y: 0.49, z: -1.171}
+  m_LocalRotation: {x: -0.088804945, y: 0.8580099, z: 0.1586116, w: 0.48039064}
+  m_LocalPosition: {x: -6.405, y: 0.805, z: 0.816}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
   m_RootOrder: 0
-  m_LocalEulerAnglesHint: {x: -16.23, y: 85.91, z: 0}
+  m_LocalEulerAnglesHint: {x: -20.947, y: 121.512, z: 0}
 --- !u!114 &1930998685
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2816,6 +2816,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   isRecording: 0
+  alwaysRecord: 1
   cloudRenderer: {fileID: 1930998687}
   rayTracingEnabled: 1
   timeBetweenSnapshots: 0
@@ -2825,11 +2826,18 @@ MonoBehaviour:
   sunIntensity: 40
   sunColor: {r: 1, g: 0.81876767, b: 0.53333336, a: 1}
   maxBounceCount: 3
-  numRaysPerPixel: 8
-  sampleChance: 0.75
+  numRaysPerPixel: 2
+  sampleChance: 1
   defocusStrength: 0
   divergeStrength: 1.5
   focusDistance: 1
+  useRaytracingMask: 1
+  raytracingMask: {fileID: 2800000, guid: d2db3f8876c269448a4480a590541736, type: 3}
+  MaskGui: {fileID: 1855699391}
+  useDenoiser: 1
+  denoiserSigmaColor: 0.15
+  denoiserSigmaDist: 0.5
+  denoiserSigmaDistScale: 0.08
   visMode: 0
   triTestVisScale: 25
   boxTestVisScale: 300
@@ -2867,7 +2875,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1930998682}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 84f6c6f3e50dc4b4a9d532b7e2e91302, type: 3}
   m_Name: 
