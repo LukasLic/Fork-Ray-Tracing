@@ -15,10 +15,11 @@ Shader "Custom/RayTracer"
 			#include "UnityCG.cginc"
 
 			#define MAX_POINT_LIGHTS 127
-			#define MAX_BLOCKER_SEGMENTS 255
+			#define MAX_BLOCKER_SEGMENTS 1023
 
-			 // Testing level values - really flat game.
-			#define MAX_POS_Y 1.9
+			// Testing level values - really flat game.
+			#define MAX_POS_Y_START 1.5
+			#define MAX_POS_Y_END 1.99
 			#define MIN_POS_Y -100.0
 
 			struct appdata
@@ -194,8 +195,17 @@ Shader "Custom/RayTracer"
 				float3 pixelWorldPos3 =	tex2D(_CameraWorldPositions, i.uv).rgb;
 				float2 worldPos = float2(pixelWorldPos3.x, pixelWorldPos3.z);
 
-				// Pixel is too high or too low, discard.
-				if(pixelWorldPos3.y < MIN_POS_Y || pixelWorldPos3.y > MAX_POS_Y) // TODO Make configurable and do a smooth transition.
+				// Pixel is too low => discard.
+				if(pixelWorldPos3.y < MIN_POS_Y)
+				{
+					return float4(0.0, 0.0, 0.0, 1.0);
+				}
+
+				// Pixel is too high => discard or smooth out.
+				// float edgeSmooth = smoothstep(MAX_POS_Y_START, MAX_POS_Y_END, pixelWorldPos3.y); // 0 -> 1 (clamped)
+				float t = saturate((pixelWorldPos3.y - MAX_POS_Y_START) / (MAX_POS_Y_END - MAX_POS_Y_START));
+				float edgeSmooth = t*t*t*(t*(t*6.0 - 15.0) + 10.0);
+				if(edgeSmooth >= 1.0) // Fully dark 
 				{
 					return float4(0.0, 0.0, 0.0, 1.0);
 				}
@@ -259,7 +269,8 @@ Shader "Custom/RayTracer"
 					l += atten;
 				}
 
-				return float4(pixelColor * saturate(l), 1.0);
+				float3 result = pixelColor * saturate(l) * (1 - edgeSmooth);
+				return float4(result, 1.0);
 			}
 
 			ENDCG

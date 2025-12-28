@@ -18,6 +18,7 @@ public class RayTracing2D : MonoBehaviour
     ComputeBuffer pointLightsBuffer;
 
     private const int MAX_POINT_LIGHTS = 127; // Must be same length as the shader!
+    private const int MAX_BLOCKER_SEGMENTS = 1023; // Must be same length as the shader!
 
     private void OnEnable()
     {
@@ -45,6 +46,12 @@ public class RayTracing2D : MonoBehaviour
             var lines = box.GetLines();
             for (int i = 0; i < lines.Count; i++)
             {
+                if (i >= MAX_BLOCKER_SEGMENTS)
+                {
+                    Debug.LogError("Exceeded max blocker segments limit: " + MAX_BLOCKER_SEGMENTS);
+                    break;
+                }
+
                 var A = new Vector3(
                     lines[i].x,
                     1,
