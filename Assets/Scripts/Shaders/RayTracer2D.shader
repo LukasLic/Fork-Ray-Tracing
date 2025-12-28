@@ -17,6 +17,10 @@ Shader "Custom/RayTracer"
 			#define MAX_POINT_LIGHTS 127
 			#define MAX_BLOCKER_SEGMENTS 1023
 
+			#define PI2 6.28318530718
+			#define GOLDEN_ANGLE 2.39996322973 // radians
+			#define LIGHT_SAMPLES 8
+
 			// Testing level values - really flat game.
 			#define MAX_POS_Y_START 1.5
 			#define MAX_POS_Y_END 1.99
@@ -41,6 +45,32 @@ Shader "Custom/RayTracer"
 				o.uv = v.uv;
 				return o;
 			}
+
+			// >>>>>>>>>>>> Stable point sampling in disk end >>>>>>>>>>>>
+			float2 VogelDiskSample(int i, int n)
+			{
+				// Deterministic, evenly spread samples in a disk
+				float fi = (float)i + 0.5;
+				float r = sqrt(fi / (float)n);
+				float a = (float)i * GOLDEN_ANGLE;
+				return float2(cos(a), sin(a)) * r;
+			}
+
+			// Optional: rotate the whole pattern per-pixel, but stable over time (still no flicker).
+			float StableAngle(float2 p)
+			{
+				// Small hash from position -> angle in [0, 2pi)
+				float h = frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
+				return h * PI2;
+			}
+
+			float2 Rotate2D(float2 v, float a)
+			{
+				float s = sin(a);
+				float c = cos(a);
+				return float2(c * v.x - s * v.y, s * v.x + c * v.y);
+			}
+			// <<<<<<<<<<<< Stable point sampling in disk end <<<<<<<<<<<<
 
 			float PointLightAtten_Smooth(float d, float radius, float intensity)
 			{
@@ -210,7 +240,12 @@ Shader "Custom/RayTracer"
 					return float4(0.0, 0.0, 0.0, 1.0);
 				}
 
-				float l = 0.0;
+				// If you do not want any per-pixel variation, set rot = 0.
+				// If you want to break up visible patterns but keep it stable, use StableAngle.
+				float rot = 0.0;
+				// float rot = StableAngle(worldPos * 0.001); // Tweak scale to taste
+				float SoftShadowRadius = 0.25; // In world units
+				float atten = 0.0;
 
 				[loop]
 				for (int j = 0; j < MAX_POINT_LIGHTS; j++)
@@ -218,58 +253,73 @@ Shader "Custom/RayTracer"
 					if(j >= PointLightCount) break;
 
 					float4 light = PointLights[j];
-					float d = distance(worldPos, light.xy);
-					float atten = PointLightAtten_Smooth(d, light.z, light.w);
+					float attenAcc  = 0.0; // Accumulated light attenuation
 
-					if (atten <= 0.0) continue;
-
-					// Check for blockers
-					[loop]
-					for (int s = 0; s < MAX_BLOCKER_SEGMENTS; s++)
+					// Sample each light multiple times for soft shadows
+					for(int ls = 0; ls < LIGHT_SAMPLES; ls++)
 					{
-						if (s >= BlockerSegmentCount) break;
+						float2 jitter = VogelDiskSample(ls, LIGHT_SAMPLES);
+						jitter = Rotate2D(jitter, rot) * SoftShadowRadius;
 
-						float4 segment = BlockerSegments[s];
-						float2 _A = segment.xy;
-						float2 _B = segment.zw;
+						float2 lightXY = light.xy + jitter;
 
-						float2 toLight  = light.xy - worldPos;
-						float toLightDot = dot(toLight, toLight);
+						float d = distance(worldPos, lightXY);
+						float sampleAtten = PointLightAtten_Smooth(d, light.z, light.w);
 
-						// Cheap projection gate
-						// Keep only blockers that overlap the slab between worldPos (t=0) and light.xy (t=1)
-						float pa = dot(_A - worldPos, toLight);
-						float pb = dot(_B - worldPos, toLight);
-						if (max(pa, pb) <= 0.0) continue; // both points behind worldPos
-						if (min(pa, pb) >= toLightDot)  continue; // both points beyond light.xy
+						if (sampleAtten <= 0.0) continue; // No light contribution, skip shadow check
 
-						// Optional AABB gate
-						// (The lines form a bounding box, so if the boxes don't overlap, no intersection is possible)
-						float2 segMin = min(_A, _B);
-						float2 segMax = max(_A, _B);
-						float2 rayMin = min(worldPos, light.xy);
-						float2 rayMax = max(worldPos, light.xy);
-						if (segMax.x < rayMin.x || segMin.x > rayMax.x ||
-							segMax.y < rayMin.y || segMin.y > rayMax.y) continue;
-
-						// TODO: Move the worldPos a bit towards the light to avoid self-shadowing issues.
-						float2 worldPosC = worldPos + normalize(light.xy - worldPos) * 1e-3;
-
-						// Full 2D line segment intersection test
-						// Exact test
-						float3 debugCol;
-						if (SegSegHit(worldPosC, light.xy, _A, _B, debugCol))
+						// Check for blockers
+						[loop]
+						for (int s = 0; s < MAX_BLOCKER_SEGMENTS; s++)
 						{
-							// return float4(debugCol, 1.0);
-							atten = 0.0;
-							break;
-						}
-					}
+							if (s >= BlockerSegmentCount) break;
 
-					l += atten;
+							float4 segment = BlockerSegments[s];
+							float2 _A = segment.xy;
+							float2 _B = segment.zw;
+
+							float2 toLight  = lightXY - worldPos;
+							float toLightDot = dot(toLight, toLight);
+
+							// Cheap projection gate
+							// Keep only blockers that overlap the slab between worldPos (t=0) and lightXY (t=1)
+							float pa = dot(_A - worldPos, toLight);
+							float pb = dot(_B - worldPos, toLight);
+							if (max(pa, pb) <= 0.0) continue; // both points behind worldPos
+							if (min(pa, pb) >= toLightDot)  continue; // both points beyond lightXY
+
+							// Optional AABB gate
+							// (The lines form a bounding box, so if the boxes don't overlap, no intersection is possible)
+							float2 segMin = min(_A, _B);
+							float2 segMax = max(_A, _B);
+							float2 rayMin = min(worldPos, lightXY);
+							float2 rayMax = max(worldPos, lightXY);
+							if (segMax.x < rayMin.x || segMin.x > rayMax.x ||
+								segMax.y < rayMin.y || segMin.y > rayMax.y) continue;
+
+							// TODO: Move the worldPos a bit towards the light to avoid self-shadowing issues.
+							float2 worldPosC = worldPos + normalize(lightXY - worldPos) * 1e-3;
+
+							// Full 2D line segment intersection test
+							// Exact test
+							float3 debugCol;
+							if (SegSegHit(worldPosC, lightXY, _A, _B, debugCol))
+							{
+								// return float4(debugCol, 1.0);
+								sampleAtten = 0.0;
+								break;
+							}
+						}
+
+						attenAcc += sampleAtten; // Accumulate light contribution from this sample
+					}
+				
+				attenAcc /= (float)LIGHT_SAMPLES; // Average over samples per light
+				atten += attenAcc; // Accumulate over lights
+
 				}
 
-				float3 result = pixelColor * saturate(l) * (1 - edgeSmooth);
+				float3 result = pixelColor * saturate(atten) * (1 - edgeSmooth);
 				return float4(result, 1.0);
 			}
 
