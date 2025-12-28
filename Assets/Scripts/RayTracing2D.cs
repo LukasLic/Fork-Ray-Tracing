@@ -14,9 +14,10 @@ public class RayTracing2D : MonoBehaviour
 
     // Materials and render textures
     Material rayTracingMaterial;
+    ComputeBuffer lineBlockersBuffer;
     ComputeBuffer pointLightsBuffer;
 
-    private const int MAX_POINT_LIGHTS = 128;
+    private const int MAX_POINT_LIGHTS = 127 // Must be same length as the shader!
 
     private void OnEnable()
     {
@@ -36,29 +37,39 @@ public class RayTracing2D : MonoBehaviour
 
     private void LateUpdate()
     {
-        //var boxObstacles = FindObjectsOfType<RT_BoxObstacle>();
+        var boxObstacles = FindObjectsOfType<RT_BoxObstacle>();
+        var lineBlockersData = new List<float4>();
 
-        //foreach (var box in boxObstacles)
-        //{
-        //    var lines = box.GetLines();
-        //    for (int i = 0; i < lines.Count; i++)
-        //    {
-        //        var A = new Vector3(
-        //            lines[i].x,
-        //            1,
-        //            lines[i].y);
+        foreach (var box in boxObstacles)
+        {
+            var lines = box.GetLines();
+            for (int i = 0; i < lines.Count; i++)
+            {
+                var A = new Vector3(
+                    lines[i].x,
+                    1,
+                    lines[i].y);
 
-        //        var B = new Vector3(
-        //            lines[(i + 1) % lines.Count].x,
-        //            1,
-        //            lines[(i + 1) % lines.Count].y);
+                var B = new Vector3(
+                    lines[(i + 1) % lines.Count].x,
+                    1,
+                    lines[(i + 1) % lines.Count].y);
 
-        //        Debug.DrawLine(A, B, Color.red);
-        //    }
-        //}
+                Debug.DrawLine(A, B, Color.red);
+                lineBlockersData.Add(new float4()
+                {
+                    x = lines[i].x,
+                    y = lines[i].y,
+                    z = lines[(i + 1) % lines.Count].x,
+                    w = lines[(i + 1) % lines.Count].y,
+                });
+            }
+        }
+
+        ShaderHelper.CreateStructuredBuffer(ref lineBlockersBuffer, lineBlockersData.ToArray());
 
         var lights = FindObjectsOfType<RT_PointLight>();
-        var lightDataList = new List<float4>();
+        var lightData = new List<float4>();
 
         for (int i = 0; i < lights.Length; i++)
         {
@@ -70,7 +81,7 @@ public class RayTracing2D : MonoBehaviour
 
             var light = lights[i];
 
-            lightDataList.Add(new float4()
+            lightData.Add(new float4()
             {
                 x = light.transform.position.x,
                 y = light.transform.position.z,
@@ -79,7 +90,7 @@ public class RayTracing2D : MonoBehaviour
             });
         }
 
-        ShaderHelper.CreateStructuredBuffer(ref pointLightsBuffer, lightDataList.ToArray());
+        ShaderHelper.CreateStructuredBuffer(ref pointLightsBuffer, lightData.ToArray());
         //pointLightsBuffer.SetData(lightDataList.ToArray());
     }
 
@@ -100,6 +111,8 @@ public class RayTracing2D : MonoBehaviour
         worldPosCamera.targetTexture = worldPosRT;
         worldPosCamera.RenderWithShader(worldPosShader, "RenderType");
 
+        rayTracingMaterial.SetInt("BlockerSegmentCount", lineBlockersBuffer != null ? lineBlockersBuffer.count : 0);
+        rayTracingMaterial.SetBuffer("BlockerSegments", lineBlockersBuffer);
         rayTracingMaterial.SetInt("PointLightCount", pointLightsBuffer != null ? pointLightsBuffer.count : 0);
         rayTracingMaterial.SetBuffer("PointLights", pointLightsBuffer);
         rayTracingMaterial.SetTexture("_CameraWorldPositions", worldPosRT);
@@ -116,6 +129,7 @@ public class RayTracing2D : MonoBehaviour
         if (Application.isPlaying)
         {
             Destroy(rayTracingMaterial);
+            ShaderHelper.Release(lineBlockersBuffer);
             ShaderHelper.Release(pointLightsBuffer);
         }
     }
