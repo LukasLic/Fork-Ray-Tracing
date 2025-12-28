@@ -17,7 +17,7 @@ public class RayTracing2D : MonoBehaviour
     ComputeBuffer lineBlockersBuffer;
     ComputeBuffer pointLightsBuffer;
 
-    private const int MAX_POINT_LIGHTS = 127 // Must be same length as the shader!
+    private const int MAX_POINT_LIGHTS = 127; // Must be same length as the shader!
 
     private void OnEnable()
     {
