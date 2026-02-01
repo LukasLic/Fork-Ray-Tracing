@@ -71,6 +71,9 @@ Shader "Custom/RayTracer"
 			{
 				float3 posA, posB, posC;
 				float3 normA, normB, normC;
+
+				// float2 uvA, uvB, uvC;
+				// float4 tanA, tanB, tanC; // xyz = tangent, w = handedness
 			};
 
 			struct TriangleHitInfo
@@ -174,7 +177,21 @@ Shader "Custom/RayTracer"
 			// Crude sky colour function for background light
 			float3 GetEnvironmentLight(float3 dir)
 			{
-				if (UseSky == 0) return 0;
+				if (UseSky == 0)
+				{
+					float3 sunDir = normalize(_WorldSpaceLightPos0.xyz);
+					float  cosAng = dot(normalize(dir), sunDir);
+
+					// Hard cutoff for "pitch black unless looking close to the sun"
+					// Tune these two to control sun size and edge softness.
+					const float SunDiskCos = 0.9995;   // closer to 1 = smaller disc
+					const float SunEdgeSoft = 0.0003;  // smaller = sharper edge
+
+					float sunMask = smoothstep(SunDiskCos - SunEdgeSoft, SunDiskCos, cosAng);
+					float sunCore = pow(saturate(cosAng), SunFocus) * SunIntensity;
+
+					return SunColour * (sunCore * sunMask);
+				}
 				const float3 GroundColour = float3(0.35, 0.3, 0.35);
 				const float3 SkyColourHorizon = float3(1, 1, 1);
 				const float3 SkyColourZenith = float3(0.08, 0.37, 0.73);
@@ -185,7 +202,9 @@ Shader "Custom/RayTracer"
 				float3 skyGradient = lerp(SkyColourHorizon, SkyColourZenith, skyGradientT);
 				float sun = pow(max(0, dot(dir, _WorldSpaceLightPos0.xyz)), SunFocus) * SunIntensity; // TODO
 				// Combine ground, sky, and sun
-				float3 composite = lerp(GroundColour, skyGradient, groundToSkyT);//; + sun * SunColour * (groundToSkyT >= 1);
+				float3 background = lerp(GroundColour, skyGradient, groundToSkyT);
+				float3 composite = background * 99.0 + sun * SunColour * (groundToSkyT >= 1);
+				// float3 composite = lerp(GroundColour, skyGradient, groundToSkyT);
 				return composite;
 			}
 
@@ -310,6 +329,8 @@ Shader "Custom/RayTracer"
 				{
 					Model model = ModelInfo[i];
 
+					// FIXME: InvisibleLight materials can still bounce subsequent rays into wrong directions.
+					// We should add the emisssion light, but continue traversing the ray.
 					if(model.material.flag == 2 && bounce == 0) // InvisibleLight
 					{
 						// TODO: Add emission pass info
@@ -383,6 +404,19 @@ Shader "Custom/RayTracer"
 						// Offset to avoid self-hit speckles
 						rayOrigin = hitInfo.hitPoint + hitInfo.normal * 1e-4;
 
+						// /////////////////////////////////////////////////////////////
+						// Apply distance absorption for the segment we just traveled
+						if(bounceIndex > 0 && hitInfo.didHit && hitInfo.material.flag == 2)
+						{
+							// float AirAbsorption = 0.155; // tune
+							float BounceAbsorption = 0.275; // tune
+							// rayColour *= exp(-AirAbsorption * hitInfo.dst);
+							rayColour *= exp(-BounceAbsorption * bounceIndex * bounceIndex);
+							// rayColour *= (1.0 / bounceIndex);
+						}
+						// /////////////////////////////////////////////////////////////
+
+						// Figure out new ray direction
 						float3 diffuseDir = normalize(hitInfo.normal + RandomDirection(rngState));
 						float3 specularDir = reflect(rayDir, hitInfo.normal);
 						rayDir = normalize(lerp(diffuseDir, specularDir, material.smoothness * isSpecularBounce));
@@ -392,15 +426,26 @@ Shader "Custom/RayTracer"
 						incomingLight += emittedLight * rayColour;
 						rayColour *= lerp(material.colour, material.specularColour, isSpecularBounce);
 
+						// End early when hitting emission surface
+						if(bounceIndex > 0 && hitInfo.didHit && hitInfo.material.flag == 2)
+						{
+							break;
+						}
 						// Random early exit if ray colour is nearly 0 (can't contribute much to final result)
-						float p = max(rayColour.r, max(rayColour.g, rayColour.b));
-						if (RandomValue(rngState) >= p) {
+						// float p = max(rayColour.r, max(rayColour.g, rayColour.b));
+						float p = dot(saturate(rayColour), float3(0.2126, 0.7152, 0.0722));
+						if ((RandomValue(rngState) * 1.0) >= p) {
 							break;
 						}
 						rayColour *= 1.0f / p;
 					}
 					else
 					{
+						if(bounceIndex > 0)
+						{
+							float BounceAbsorption = 0.365; // tune
+							rayColour *= exp(-BounceAbsorption * bounceIndex);
+						}
 						incomingLight += GetEnvironmentLight(rayDir) * rayColour;
 						break;
 					}
@@ -472,10 +517,10 @@ Shader "Custom/RayTracer"
 				float distSum = 0.0;
 				int distCount = 0;
 
-				if(RandomValue(rngState) > 0.05f) // TODO: Configurable
-				{
-					return float4(0,0,0, 0);
-				}
+				// if(RandomValue(rngState) > 0.25f) // TODO: Configurable
+				// {
+				// 	return float4(0,0,0, 0);
+				// }
 
 				for (int rayIndex = 0; rayIndex < NumRaysPerPixel; rayIndex++)
 				{

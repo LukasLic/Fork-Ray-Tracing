@@ -1,0 +1,135 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &5041097813539920232
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 5041097813539920238}
+  - component: {fileID: 5041097813539920233}
+  - component: {fileID: 5041097813539920236}
+  - component: {fileID: 5041097813539920239}
+  m_Layer: 0
+  m_Name: Main Camera
+  m_TagString: MainCamera
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &5041097813539920238
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5041097813539920232}
+  m_LocalRotation: {x: -0.053173594, y: 0.6292206, z: 0.043216098, w: 0.77420044}
+  m_LocalPosition: {x: -6.87, y: 0.73, z: -0.4}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_RootOrder: 0
+  m_LocalEulerAnglesHint: {x: -7.858, y: 78.204, z: 0}
+--- !u!20 &5041097813539920233
+Camera:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5041097813539920232}
+  m_Enabled: 1
+  serializedVersion: 2
+  m_ClearFlags: 2
+  m_BackGroundColor: {r: 0, g: 0, b: 0, a: 0}
+  m_projectionMatrixMode: 1
+  m_GateFitMode: 2
+  m_FOVAxisMode: 0
+  m_SensorSize: {x: 36, y: 24}
+  m_LensShift: {x: 0, y: 0}
+  m_FocalLength: 50
+  m_NormalizedViewPortRect:
+    serializedVersion: 2
+    x: 0
+    y: 0
+    width: 1
+    height: 1
+  near clip plane: 0.3
+  far clip plane: 1000
+  field of view: 60
+  orthographic: 0
+  orthographic size: 2.08
+  m_Depth: -1
+  m_CullingMask:
+    serializedVersion: 2
+    m_Bits: 2147483647
+  m_RenderingPath: -1
+  m_TargetTexture: {fileID: 0}
+  m_TargetDisplay: 0
+  m_TargetEye: 3
+  m_HDR: 1
+  m_AllowMSAA: 1
+  m_AllowDynamicResolution: 0
+  m_ForceIntoRT: 0
+  m_OcclusionCulling: 1
+  m_StereoConvergence: 10
+  m_StereoSeparation: 0.022
+--- !u!114 &5041097813539920236
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5041097813539920232}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2154bf8aa466fb348bed2f4413e8d1ca, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  lookSensitivity: 2
+  holdRightMouseToLook: 1
+  lockCursorOnStart: 1
+  moveSpeed: 10
+  sprintMultiplier: 3
+  scrollSpeedStep: 2
+  upKey: 101
+  downKey: 113
+  sprintKey: 304
+--- !u!114 &5041097813539920239
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5041097813539920232}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a8f0cfe8b2ea54541bdc4c6a5944044d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  rayTracingEnabled: 1
+  autoRecord: 1
+  timeBetweenSnapshots: 0
+  accumulate: 1
+  denoise: 3
+  useSky: 1
+  sunFocus: 500
+  sunIntensity: 0.1
+  sunColor: {r: 1, g: 0.81876767, b: 0.53333336, a: 1}
+  maxBounceCount: 32
+  numRaysPerPixel: 1
+  defocusStrength: 0
+  divergeStrength: 0
+  focusDistance: 0.1
+  visMode: 0
+  triTestVisScale: 25
+  boxTestVisScale: 300
+  distanceTestVisScale: 10
+  useSceneView: 0
+  rayTracingShader: {fileID: 4800000, guid: d4f2f0e08aa9737439cfca698f4d5a35, type: 3}
+  accumulateShader: {fileID: 4800000, guid: df4a8462c17c09c46a04959859954249, type: 3}
+  composeShader: {fileID: 4800000, guid: 398677f3a10b5a8449ee3ca8b1ece781, type: 3}
+  numAccumulatedFrames: 0

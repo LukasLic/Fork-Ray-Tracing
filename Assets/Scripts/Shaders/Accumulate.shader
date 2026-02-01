@@ -51,51 +51,105 @@ Shader "Hidden/Accumulate"
 					return tex2D(_MainTex, i.uv);
 				}
 
-				// if(_ClearFrameCount == 0)
-				// {
+				float weight = 0.5f;
+				float4 sample = tex2D(_MainTex, i.uv);
+				float4 prev = tex2D(_PrevFrame, i.uv);
+				// ///////////////////////////////////////////////////////////////
+				// ///////////////////////////////////////////////////////////////
+				weight = 1.0 / (float)((_Frame/4.0) + 1);
+				return lerp(prev, sample, weight);
+				// ///////////////////////////////////////////////////////////////
+				// ///////////////////////////////////////////////////////////////
+				float3 prevRgb   = prev.rgb;
+				float3 sampleRgb = sample.rgb;
 
-				// 	return float4(0,0,0,0);
+				// HDR luminance (Rec.709)
+				float prevLum   = dot(prevRgb,   float3(0.2126, 0.7152, 0.0722));
+				float sampleLum = dot(sampleRgb, float3(0.2126, 0.7152, 0.0722));
+
+				if (sampleLum > prevLum)
+				{
+					weight = 0.8f;
+					return lerp(prev, sample, weight);
+				}
+				else
+				{
+					weight = 1.0 / (float)(_Frame + 1);
+					// float3 _new = prev + (sample - prev) * weight;
+					// return lerp(prev, _new, weight);
+					return lerp(prev, sample, weight);
+				}
+
+				// // return lerp(prev, sample, 0.45);
+
+				// // _Frame should be 0 on the first accumulated frame after a reset/clear.
+				// float weight = 0.5f;
+				// if (_Frame < 10)
+				// {
+				// 	return lerp(prev, sample, 0.45); // constant blend factor
+				// }
+				// else if(_Frame < 300)
+				// {
+				// 	int __frame = (_Frame / 2) + 5;
+				// 	weight = 1.0 / (float)(__frame + 1);
+				// 	return prev + (sample - prev) * weight; // simple weight over time
+				// }
+				// else
+				// {
+				// 	weight = 1.0 / (float)(_Frame + 1);
+				// 	return prev + (sample - prev) * weight;
+				// }
+				
+				// return lerp(prev, sample, 0.05); // constant blend factor
+				// ///////////////////////////////////////////////////////////////
+				// ///////////////////////////////////////////////////////////////
+
+				// // if(_ClearFrameCount == 0)
+				// // {
+
+				// // 	return float4(0,0,0,0);
+				// // }
+
+				// float4 col = tex2D(_MainTex, i.uv);
+				// float4 colPrev = tex2D(_PrevFrame, i.uv);
+
+				// // If this frame was not a hit...
+				// if(col.a == 0)
+				// {
+				// 	// ...and previous frame was also not a hit, return a debug color (red).
+				// 	if(colPrev.a == 0)
+				// 	{
+				// 		return float4(1,0,0, 0); // Debug red for no hit yet.
+				// 		// return float4(0,0,0, 0);
+				// 	}
+				// 	// ...else return previous frame color (don't update by misses).
+				// 	else
+				// 	{
+				// 		return colPrev;
+				// 	}
 				// }
 
-				float4 col = tex2D(_MainTex, i.uv);
-				float4 colPrev = tex2D(_PrevFrame, i.uv);
+				// // If this is the first valid hit frame, throw away the previous debug red.
+				// if(colPrev.a == 0)
+				// {
+				// 	return col;
+				// }
 
-				// If this frame was not a hit...
-				if(col.a == 0)
-				{
-					// ...and previous frame was also not a hit, return a debug color (red).
-					if(colPrev.a == 0)
-					{
-						return float4(1,0,0, 0); // Debug red for no hit yet.
-						// return float4(0,0,0, 0);
-					}
-					// ...else return previous frame color (don't update by misses).
-					else
-					{
-						colPrev;
-					}
-				}
+				// // FIXME: Make one distance texture and one RGB texture, where Alpha is the next image weight.
+				// // This will fix, the behaviour where the random chance picks a color, but too late, so the weight is negligible.
 
-				// If this is the first valid hit frame, throw away the previous debug red.
-				if(colPrev.a == 0)
-				{
-					return col;
-				}
+				// // float dst = col.a;
+				// // float dstPrev = colPrev.a;
 
-				// FIXME: Make one distance texture and one RGB texture, where Alpha is the next image weight.
-				// This will fix, the behaviour where the random chance picks a color, but too late, so the weight is negligible.
-
-				// float dst = col.a;
-				// float dstPrev = colPrev.a;
-
-				float weight = 1.0 / (_Frame + 1);
-				// Combine prev frame with current frame. Weight the contributions to result in an average over all frames.
-				float4 accumulatedCol = saturate(colPrev * (1 - weight) + col * weight); // Saturate to avoid HDR issues (for ex. too bright sun).
-				//float4 accumulatedCol = colPrev * (1 - weight) + col * weight;
+				// float weight = 1.0 / (_Frame + 1);
+				// // Combine prev frame with current frame. Weight the contributions to result in an average over all frames.
+				// // float4 accumulatedCol = saturate(colPrev * (1 - weight) + col * weight); // Saturate to avoid HDR issues (for ex. too bright sun).
 				
-				//accumulatedCol.a = dst * weight + dstPrev * (1 - weight); // Accumulate distance in alpha channel.
+				// float4 accumulatedCol = colPrev * (1 - weight) + col * weight;
+				
+				// //accumulatedCol.a = dst * weight + dstPrev * (1 - weight); // Accumulate distance in alpha channel.
 
-				return accumulatedCol;
+				// return accumulatedCol;
 			}
 			ENDCG
 		}

@@ -1,7 +1,8 @@
+using System;
+using System.Collections.Generic;
+using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Rendering;
-using System.Collections.Generic;
-using System;
 
 public class RayTracingManager : MonoBehaviour
 {
@@ -14,13 +15,15 @@ public class RayTracingManager : MonoBehaviour
         Normal = 4
     }
 
-    // Game Controlled params
-    [HideInInspector] public bool isRecording = false;
+    private bool IsRecording => autoRecord || Input.GetKey(KeyCode.Mouse0);
 
     [Header("Main Settings")]
     [SerializeField] bool rayTracingEnabled = true;
+    [SerializeField] bool autoRecord = true;
     [SerializeField] float timeBetweenSnapshots = 1f;
     public bool accumulate = true;
+    [Range(1, 5)]
+    public int denoise = 0;
     public bool useSky;
     [SerializeField] float sunFocus = 500;
     [SerializeField] float sunIntensity = 10;
@@ -131,16 +134,14 @@ public class RayTracingManager : MonoBehaviour
             {
                 InitFrame();
 
-                isRecording = Input.GetKey(KeyCode.Mouse0);
-
                 if (visMode == VisMode.Default)
                 {
                     // Update timer
-                    timeSinceLastSnapshot += isRecording ? Time.deltaTime : 0f;
+                    timeSinceLastSnapshot += IsRecording ? Time.deltaTime : 0f;
 
                     // TODO: Initialize new snapshot with weight to 0.
 
-                    if(isRecording && timeSinceLastSnapshot >= timeBetweenSnapshots)
+                    if(IsRecording && timeSinceLastSnapshot >= timeBetweenSnapshots)
                     {
                         //Debug.Log("Time since last snapshot: " + Math.Round((decimal)timeSinceLastSnapshot, 4));
                         // Reset timer
@@ -167,17 +168,28 @@ public class RayTracingManager : MonoBehaviour
                         RenderTexture resultCopy = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
                         Graphics.Blit(resultTexture, resultCopy);
 
-                        // Compose the final image and draw it to screen
                         composeMaterial.SetTexture("_Snapshot01", resultTexture);
-                        Graphics.Blit(null, composedTexture, composeMaterial);
+                        composeMaterial.SetInt("_Denoise", denoise);
+                        composeMaterial.SetVector("_Snapshot01_TexelSize",
+                            new Vector4(
+                                1f / resultTexture.width,
+                                1f / resultTexture.height,
+                                resultTexture.width,
+                                resultTexture.height));
+                        Graphics.Blit(null, target, composeMaterial);
 
-                        // Draw result to screen
-                        //Graphics.Blit(resultTexture, target);
-                        Graphics.Blit(composedTexture, target);
+                        //// Compose the final image and draw it to screen
+                        //composeMaterial.SetTexture("_Snapshot01", resultTexture);
+                        //Graphics.Blit(null, composedTexture, composeMaterial);
+
+                        //// Draw result to screen
+                        ////Graphics.Blit(resultTexture, target);
+                        //Graphics.Blit(composedTexture, target);
 
                         // Release temps
                         RenderTexture.ReleaseTemporary(prevFrameCopy);
                         RenderTexture.ReleaseTemporary(currentFrame);
+                        RenderTexture.ReleaseTemporary(resultCopy);
                         numAccumulatedFrames += Application.isPlaying ? 1 : 0;
                     }
                     else
@@ -188,6 +200,12 @@ public class RayTracingManager : MonoBehaviour
 
                         // Compose the final image and draw it to screen
                         composeMaterial.SetTexture("_Snapshot01", resultTexture);
+                        composeMaterial.SetVector("_Snapshot01_TexelSize",
+                            new Vector4(
+                                1f / resultTexture.width,
+                                1f / resultTexture.height,
+                                resultTexture.width,
+                                resultTexture.height));
                         Graphics.Blit(null, composedTexture, composeMaterial);
 
                         // Draw result to screen
