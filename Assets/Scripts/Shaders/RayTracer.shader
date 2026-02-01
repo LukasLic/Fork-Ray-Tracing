@@ -7,10 +7,13 @@ Shader "Custom/RayTracer"
 		Pass
 		{
 			CGPROGRAM
+			UNITY_DECLARE_TEX2DARRAY(_NormalMaps);
+
 			#pragma vertex vert
 			#pragma fragment frag
 			#include "UnityCG.cginc"
 			#pragma multi_compile _ DEBUG_VIS
+			#pragma target 4.5
 
 			#define MAX_DISTANCE 5000.0
 			#define NO_HIT 0.0
@@ -72,8 +75,8 @@ Shader "Custom/RayTracer"
 				float3 posA, posB, posC;
 				float3 normA, normB, normC;
 
-				// float2 uvA, uvB, uvC;
-				// float4 tanA, tanB, tanC; // xyz = tangent, w = handedness
+				float2 uvA, uvB, uvC;
+				float4 tanA, tanB, tanC; // xyz = tangent, w = handedness
 			};
 
 			struct TriangleHitInfo
@@ -81,8 +84,10 @@ Shader "Custom/RayTracer"
 				bool didHit;
 				float dst;
 				float3 hitPoint;
-				float3 normal;
+				float3 normal; // interpolated vertex normal (local)
 				int triIndex;
+				float3 bary;     // (w,u,v)
+				Triangle tri;
 			};
 
 			struct RayTracingMaterial
@@ -94,6 +99,10 @@ Shader "Custom/RayTracer"
 				float smoothness;
 				float specularProbability;
 				int flag;
+
+				int normalScale;    // typical 1
+				int normalMapIndex;   // -1 = none
+				float4 uvST;          // xy = scale, zw = offset
 			};
 
 			struct Model
@@ -118,7 +127,8 @@ Shader "Custom/RayTracer"
 			struct ModelHitInfo
 			{
 				bool didHit;
-				float3 normal;
+			    float3 normal;      // shading normal (world) - includes normal map
+				float3 geoNormal;   // geometric normal (world) - use for ray offset
 				float3 hitPoint;
 				float dst;
 				RayTracingMaterial material;
@@ -210,6 +220,40 @@ Shader "Custom/RayTracer"
 
 			// --- Ray Intersection Functions ---
 
+			// Build an orthonormal basis (tangent, bitangent) from a unit normal n.
+			// Frisvad 2012, branchless and no normalize needed if n is normalized.
+			void BuildONB_Frisvad(float3 n, out float3 t, out float3 b)
+			{
+				float sign_ = (n.z >= 0.0) ? 1.0 : -1.0;
+				float a = -1.0 / (sign_ + n.z);
+				float bxy = n.x * n.y * a;
+
+				t = float3(1.0 + sign_ * n.x * n.x * a, sign_ * bxy, -sign_ * n.x);
+				b = float3(bxy, sign_ + n.y * n.y * a, -n.y);
+			}
+
+			// Cosine-weighted hemisphere sample around normal n (n must be normalized)
+			float3 CosineSampleHemisphereFast(float3 n, inout uint rngState)
+			{
+				float u1 = RandomValue(rngState);
+				float u2 = RandomValue(rngState);
+
+				float phi = 2.0 * PI * u1;
+
+				float s, c;
+				sincos(phi, s, c);
+
+				float r = sqrt(u2);
+				float x = r * c;
+				float y = r * s;
+				float z = sqrt(1.0 - u2);
+
+				float3 t, b;
+				BuildONB_Frisvad(n, t, b);
+
+				return t * x + b * y + n * z;
+			}
+
 			// Calculate the intersection of a ray with a triangle using Möller–Trumbore algorithm
 			// Thanks to https://stackoverflow.com/a/42752998
 			TriangleHitInfo RayTriangle(Ray ray, Triangle tri)
@@ -235,6 +279,8 @@ Shader "Custom/RayTracer"
 				hitInfo.hitPoint = ray.origin + ray.dir * dst;
 				hitInfo.normal = normalize(tri.normA * w + tri.normB * u + tri.normC * v);
 				hitInfo.dst = dst;
+				hitInfo.bary = float3(w, u, v);
+				hitInfo.tri = tri;
 				return hitInfo;
 			}
 
@@ -262,6 +308,7 @@ Shader "Custom/RayTracer"
 				result.hitPoint = 0;
 				result.normal = 0;
 				result.triIndex = -1;
+				result.bary = 0;
 
 				int stack[32];
 				int stackIndex = 0;
@@ -315,7 +362,88 @@ Shader "Custom/RayTracer"
 				return result;
 			}
 
-			ModelHitInfo CalculateRayCollision(Ray worldRay, int bounce, out int2 stats)
+			// Encapsulates "Record closest hit" including normal-map shading normal.
+			// Call this only when (hit.didHit && hit.dst < result.dst) is already true.
+			void RecordClosestHit(
+				in Ray worldRay,
+				in Model model,
+				in TriangleHitInfo hit,
+				inout ModelHitInfo result)
+			{
+				result.didHit = true;
+				result.dst = hit.dst;
+				result.hitPoint = worldRay.origin + worldRay.dir * hit.dst;
+				result.material = model.material;
+
+				// Base world normal from vertex normals
+				float3 nW = normalize(mul(model.localToWorldMatrix, float4(hit.normal, 0)).xyz);
+				float3 shadingN = nW;
+
+				// Normal map (tangent space -> world)
+				if (result.material.normalMapIndex >= 0)
+				{
+					Triangle tri = Triangles[model.triOffset + hit.triIndex];
+					hit.tri = tri;
+
+					float w = hit.bary.x;
+					float u = hit.bary.y;
+					float v = hit.bary.z;
+
+					// Interpolated UV with scale/offset
+					float2 uv = tri.uvA * w + tri.uvB * u + tri.uvB * 0 + tri.uvC * v; // keep structure similar
+					uv = tri.uvA * w + tri.uvB * u + tri.uvC * v;
+					uv = uv * result.material.uvST.xy + result.material.uvST.zw;
+
+					// Interpolated tangent (local -> world)
+					float4 tanL = tri.tanA * w + tri.tanB * u + tri.tanC * v;
+					float3 tW_raw = mul(model.localToWorldMatrix, float4(tanL.xyz, 0)).xyz;
+
+					float3 tW, bW;
+					if (dot(tW_raw, tW_raw) < 1e-8)
+					{
+						// Fallback basis if tangent is missing/degenerate
+						BuildONB_Frisvad(nW, tW, bW);
+					}
+					else
+					{
+						tW = normalize(tW_raw);
+						tW = normalize(tW - nW * dot(nW, tW)); // orthonormalize
+						bW = cross(nW, tW) * tanL.w;           // handedness in w
+					}
+
+					// Sample normal map at LOD 0 (ray tracer has no screen-space derivatives)
+					// float3 packed = SAMPLE_TEXTURE2D_ARRAY_LOD(
+					// 	_NormalMaps, sampler_NormalMaps[result.material.normalMapIndex], float3(uv, 0), 0
+					// ).xyz;
+					float slice = (float)result.material.normalMapIndex;
+
+					// HERE - NORMAL
+					// float3 packed = UNITY_SAMPLE_TEX2DARRAY_LOD(_NormalMaps, float3(uv, slice), 0).xyz;
+					// float3 nTS = packed * 2.0 - 1.0; // Unpack tangent-space normal
+					// ////////////////////
+					float4 packed = UNITY_SAMPLE_TEX2DARRAY_LOD(_NormalMaps, float3(uv, slice), 0);
+					float3 nTS = UnpackNormal(packed);
+					nTS.xy *= result.material.normalScale;
+					nTS = normalize(nTS);
+					// ////////////////////
+
+
+					// nTS.xy *= result.material.normalScale; // Assume 1 for now
+					nTS.xy *= sqrt(result.material.normalScale);
+					nTS = normalize(nTS);
+
+					shadingN = normalize(tW * nTS.x + bW * nTS.y + nW * nTS.z);
+				}
+
+				// Keep shading normal facing the incoming ray (more stable)
+				if (dot(shadingN, -worldRay.dir) < 0) shadingN = -shadingN;
+
+				result.geoNormal = nW;
+				result.normal = shadingN;
+			}
+
+
+			ModelHitInfo CalculateRayCollision(Ray worldRay, int bounce, out int2 stats, out TriangleHitInfo triHit)
 			{
 				stats = 0;
 				ModelHitInfo result;
@@ -348,11 +476,8 @@ Shader "Custom/RayTracer"
 					// Record closest hit
 					if (hit.didHit && hit.dst < result.dst)
 					{
-						result.didHit = true;
-						result.dst = hit.dst;
-						result.normal = normalize(mul(model.localToWorldMatrix, float4(hit.normal, 0)));
-						result.hitPoint = worldRay.origin + worldRay.dir * hit.dst;
-						result.material = model.material;
+						triHit = hit;
+						RecordClosestHit(worldRay, model, hit, result);
 					}
 
 					// TODO: Apply the emission pass here.
@@ -374,6 +499,7 @@ Shader "Custom/RayTracer"
 				float3 rayColour = 1;
 				
 				int2 stats;
+				TriangleHitInfo triHit;
 				float dstSum = 0;
 
 				for (int bounceIndex = 0; bounceIndex < MaxBounceCount; bounceIndex++)
@@ -381,7 +507,7 @@ Shader "Custom/RayTracer"
 					Ray ray;
 					ray.origin = rayOrigin;
 					ray.dir = rayDir;
-					ModelHitInfo hitInfo = CalculateRayCollision(ray, bounceIndex, stats);
+					ModelHitInfo hitInfo = CalculateRayCollision(ray, bounceIndex, stats, triHit);
 
 					if (hitInfo.didHit)
 					{
@@ -402,7 +528,8 @@ Shader "Custom/RayTracer"
 						bool isSpecularBounce = material.specularProbability >= RandomValue(rngState);
 
 						// Offset to avoid self-hit speckles
-						rayOrigin = hitInfo.hitPoint + hitInfo.normal * 1e-4;
+						// rayOrigin = hitInfo.hitPoint + hitInfo.normal * 1e-4;
+						rayOrigin = hitInfo.hitPoint + hitInfo.geoNormal * 1e-4;
 
 						// /////////////////////////////////////////////////////////////
 						// Apply distance absorption for the segment we just traveled
@@ -417,7 +544,9 @@ Shader "Custom/RayTracer"
 						// /////////////////////////////////////////////////////////////
 
 						// Figure out new ray direction
-						float3 diffuseDir = normalize(hitInfo.normal + RandomDirection(rngState));
+						// float3 diffuseDir = normalize(hitInfo.normal + RandomDirection(rngState));
+						float3 diffuseDir = CosineSampleHemisphereFast(hitInfo.normal, rngState); // TODO: This should be a bit quicker
+
 						float3 specularDir = reflect(rayDir, hitInfo.normal);
 						rayDir = normalize(lerp(diffuseDir, specularDir, material.smoothness * isSpecularBounce));
 
@@ -461,7 +590,8 @@ Shader "Custom/RayTracer"
 				Ray ray;
 				ray.origin = rayOrigin;
 				ray.dir = rayDir;
-				ModelHitInfo hitInfo = CalculateRayCollision(ray, 0, stats);
+				TriangleHitInfo triHit;
+				ModelHitInfo hitInfo = CalculateRayCollision(ray, 0, stats, triHit);
 
 				// Triangle test count vis
 				if (visMode == 1)
@@ -483,8 +613,39 @@ Shader "Custom/RayTracer"
 				// Normal
 				else if (visMode == 4)
 				{
+					// hitInfo
+
 					if (!hitInfo.didHit) return 0;
-					return hitInfo.normal * 0.5 + 0.5;
+
+					// float s = triHit.bary.x + triHit.bary.y + triHit.bary.z;
+					// return float3(s, s, s); // should be almost white (1.0)
+					Triangle tri = triHit.tri;
+					RayTracingMaterial resultMaterial = hitInfo.material;
+
+					float w = triHit.bary.x;
+					float u = triHit.bary.y;
+					float v = triHit.bary.z;
+
+					// Interpolated UV with scale/offset
+					float2 uv = tri.uvA * w + tri.uvB * u + tri.uvB * 0 + tri.uvC * v; // keep structure similar
+					uv = tri.uvA * w + tri.uvB * u + tri.uvC * v;
+					uv = uv * resultMaterial.uvST.xy + resultMaterial.uvST.zw;
+
+					// return (resultMaterial.normalMapIndex + 1.0) / 8.0;
+
+					float slice = (float)resultMaterial.normalMapIndex;
+					float3 packed = UNITY_SAMPLE_TEX2DARRAY_LOD(_NormalMaps, float3(uv, slice), 0).xyz;
+
+					if(resultMaterial.normalMapIndex >= 0)
+					{
+						return packed;
+					}
+					return float3(0, 0, 0);
+
+					// return float3(uv, 0);
+
+					// return triHit.bary * float3(1, 1, 1);
+					// return hitInfo.normal * 0.5 + 0.5;
 				}
 
 				return float3(1, 0, 1); // Invalid test mode

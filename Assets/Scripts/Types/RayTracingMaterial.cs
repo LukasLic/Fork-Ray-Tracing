@@ -18,7 +18,11 @@ public struct RayTracingMaterial
 	[Range(0, 1)] public float specularProbability;
 	public MaterialFlag flag;
 
-	public void SetDefaultValues()
+	public int normalScale;
+    public int normalMapIndex;
+    public Vector4 uvST;         // (scaleX, scaleY, offsetX, offsetY)
+
+    public void SetDefaultValues()
 	{
 		colour = Color.white;
 		emissionColour = Color.white;
@@ -26,5 +30,9 @@ public struct RayTracingMaterial
 		specularColour = Color.white;
 		smoothness = 0;
 		specularProbability = 1;
-	}
+		normalScale = 1;
+        normalMapIndex = -1;
+        uvST = new Vector4(1, 1, 0, 0);
+
+    }
 }

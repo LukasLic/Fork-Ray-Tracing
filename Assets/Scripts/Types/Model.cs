@@ -8,6 +8,8 @@ public class Model : MonoBehaviour
     public RayTracingMaterial material;
     public bool logBVHStats;
 
+    public Texture2D normalMap;
+
     public MeshRenderer meshRenderer;
     [SerializeField, HideInInspector] int materialObjectID;
 
@@ -40,5 +42,7 @@ public class Model : MonoBehaviour
         bool displayEmissiveCol = mat.colour.maxColorComponent < mat.emissionColour.maxColorComponent * mat.emissionStrength;
         Color displayCol = displayEmissiveCol ? mat.emissionColour * mat.emissionStrength : mat.colour;
         meshRenderer.sharedMaterial.color = displayCol;
+
+        meshRenderer.sharedMaterial.SetTexture("_BumpMap", normalMap);
     }
 }

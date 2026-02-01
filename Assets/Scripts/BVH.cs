@@ -13,7 +13,7 @@ public class BVH
 
     readonly BVHTriangle[] AllTriangles;
 
-    public BVH(Vector3[] verts, int[] indices, Vector3[] normals)
+    public BVH(Vector3[] verts, int[] indices, Vector3[] normalsIn, Vector2[] uvsIn, Vector4[] tangentsIn)
     {
         // Start recording stats
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -40,16 +40,47 @@ public class BVH
         Split(0, verts, 0, AllTriangles.Length);
 
         allTris = new Triangle[AllTriangles.Length];
+
+        // ////////////////////////////////////////////////////////////
+        int vCount = verts.Length;
+        Vector3[] normals = (normalsIn != null && normalsIn.Length == vCount) ? normalsIn : null;
+        Vector2[] uvs = (uvsIn != null && uvsIn.Length == vCount) ? uvsIn : null;
+        Vector4[] tans = (tangentsIn != null && tangentsIn.Length == vCount) ? tangentsIn : null;
+        // ////////////////////////////////////////////////////////////
+
         for (int i = 0; i < AllTriangles.Length; i++)
         {
             BVHTriangle buildTri = AllTriangles[i];
-            Vector3 a = verts[indices[buildTri.Index + 0]];
-            Vector3 b = verts[indices[buildTri.Index + 1]];
-            Vector3 c = verts[indices[buildTri.Index + 2]];
-            Vector3 norm_a = normals[indices[buildTri.Index + 0]];
-            Vector3 norm_b = normals[indices[buildTri.Index + 1]];
-            Vector3 norm_c = normals[indices[buildTri.Index + 2]];
-            allTris[i] = new Triangle(a, b, c, norm_a, norm_b, norm_c);
+
+            int ia = indices[buildTri.Index + 0];
+            int ib = indices[buildTri.Index + 1];
+            int ic = indices[buildTri.Index + 2];
+
+            Vector3 a = verts[ia];
+            Vector3 b = verts[ib];
+            Vector3 c = verts[ic];
+
+            Vector3 na = normals != null ? normals[ia] : new Vector3(0, 1, 0);
+            Vector3 nb = normals != null ? normals[ib] : new Vector3(0, 1, 0);
+            Vector3 nc = normals != null ? normals[ic] : new Vector3(0, 1, 0);
+
+            Vector2 uva = uvs != null ? uvs[ia] : new Vector2(0, 0);
+            Vector2 uvb = uvs != null ? uvs[ib] : new Vector2(0, 0);
+            Vector2 uvc = uvs != null ? uvs[ic] : new Vector2(0, 0);
+
+            Vector4 ta = tans != null ? tans[ia] : new Vector4(0, 0, 0, 1);
+            Vector4 tb = tans != null ? tans[ib] : new Vector4(0, 0, 0, 1);
+            Vector4 tc = tans != null ? tans[ic] : new Vector4(0, 0, 0, 1);
+
+            allTris[i] = new Triangle(a, b, c, na, nb, nc, uva, uvb, uvc, ta, tb, tc);
+
+            //Vector3 a = (float3)verts[ia];
+            //Vector3 b = (float3)verts[ib];
+            //Vector3 c = (float3)verts[ic];
+            //Vector3 norm_a = normals[indices[buildTri.Index + 0]];
+            //Vector3 norm_b = normals[indices[buildTri.Index + 1]];
+            //Vector3 norm_c = normals[indices[buildTri.Index + 2]];
+            //allTris[i] = new Triangle(a, b, c, norm_a, norm_b, norm_c);
         }
 
         // Finish recording stats

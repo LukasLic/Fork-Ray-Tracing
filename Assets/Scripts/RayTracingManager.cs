@@ -15,10 +15,13 @@ public class RayTracingManager : MonoBehaviour
         Normal = 4
     }
 
-    private bool IsRecording => autoRecord || Input.GetKey(KeyCode.Mouse0);
+    private bool IsRecording => autoRecordMaxFrame > 0
+        ? (autoRecord && numAccumulatedFrames < autoRecordMaxFrame) || Input.GetKey(KeyCode.Mouse0)
+        : autoRecord || Input.GetKey(KeyCode.Mouse0);
 
     [Header("Main Settings")]
     [SerializeField] bool rayTracingEnabled = true;
+    [SerializeField] int autoRecordMaxFrame = 1000;
     [SerializeField] bool autoRecord = true;
     [SerializeField] float timeBetweenSnapshots = 1f;
     public bool accumulate = true;
@@ -57,6 +60,11 @@ public class RayTracingManager : MonoBehaviour
     RenderTexture resultTexture;
     RenderTexture composedTexture;
     RenderTexture frameCountTexture;
+
+    // Normal maps fields
+    Texture2DArray normalMapArray;
+    Dictionary<Texture2D, int> normalMapIndexByTexture = new();
+    int normalMapHash;
 
     // Buffers
     ComputeBuffer triangleBuffer;
@@ -241,6 +249,8 @@ public class RayTracingManager : MonoBehaviour
         ShaderHelper.CreateFrameCountTexture(ref frameCountTexture, Screen.width, Screen.height, "FrameCount");
         models = FindObjectsOfType<Model>();
 
+        EnsureNormalMapArray(models);
+
         if (!hasBVH)
         {
             var data = CreateAllMeshData(models);
@@ -304,7 +314,11 @@ public class RayTracingManager : MonoBehaviour
         {
             meshInfo[i].WorldToLocalMatrix = models[i].transform.worldToLocalMatrix;
             meshInfo[i].LocalToWorldMatrix = models[i].transform.localToWorldMatrix;
-            meshInfo[i].Material = models[i].material;
+            //meshInfo[i].Material = models[i].material;
+
+            var mat = models[i].material;
+            ApplyNormalMapParams(models[i], ref mat);
+            meshInfo[i].Material = mat;
         }
         modelBuffer.SetData(meshInfo);
         rayTracingMaterial.SetBuffer("ModelInfo", modelBuffer);
@@ -321,9 +335,25 @@ public class RayTracingManager : MonoBehaviour
             // Construct BVH if this is the first time seeing the current mesh (otherwise reuse)
             if (!meshLookup.ContainsKey(model.Mesh))
             {
+                var mesh = model.Mesh;
                 meshLookup.Add(model.Mesh, (allData.nodes.Count, allData.triangles.Count));
 
-                BVH bvh = new(model.Mesh.vertices, model.Mesh.triangles, model.Mesh.normals);
+                var uvs = mesh.uv;
+                var tangents = mesh.tangents;
+
+                if (uvs == null || uvs.Length != mesh.vertexCount)
+                    uvs = new Vector2[mesh.vertexCount];
+
+                if (tangents == null || tangents.Length != mesh.vertexCount)
+                {
+                    mesh.RecalculateTangents();
+                    tangents = mesh.tangents;
+
+                    if (tangents == null || tangents.Length != mesh.vertexCount)
+                        tangents = new Vector4[mesh.vertexCount];
+                }
+
+                BVH bvh = new BVH(mesh.vertices, mesh.triangles, mesh.normals, uvs, tangents);
                 if (model.logBVHStats) Debug.Log($"BVH Stats: {model.gameObject.name}\n{bvh.stats}");
 
                 allData.triangles.AddRange(bvh.GetTriangles());
@@ -336,6 +366,7 @@ public class RayTracingManager : MonoBehaviour
                 NodeOffset = meshLookup[model.Mesh].nodeOffset,
                 TriangleOffset = meshLookup[model.Mesh].triOffset,
                 WorldToLocalMatrix = model.transform.worldToLocalMatrix,
+                LocalToWorldMatrix = model.transform.localToWorldMatrix,
                 Material = model.material
             });
         }
@@ -377,8 +408,101 @@ public class RayTracingManager : MonoBehaviour
     {
         public int NodeOffset;
         public int TriangleOffset;
-        public Matrix4x4 WorldToLocalMatrix;
-        public Matrix4x4 LocalToWorldMatrix;
+        public Matrix4x4 WorldToLocalMatrix; // TODO: For static images, this may be able to be precomputed into the BVH
+        public Matrix4x4 LocalToWorldMatrix; // TODO: For static images, this may be able to be precomputed into the BVH
         public RayTracingMaterial Material;
+    }
+
+    int ComputeNormalMapHash(Model[] srcModels)
+    {
+        unchecked
+        {
+            var hash = 17;
+
+            for (var i = 0; i < srcModels.Length; i++)
+            {
+                var renderer = srcModels[i].GetComponent<Renderer>();
+                var unityMat = renderer != null ? renderer.sharedMaterial : null;
+
+                var tex = (Texture2D)null;
+                //if (unityMat != null && unityMat.HasProperty("_BumpMap"))
+                //    tex = unityMat.GetTexture("_BumpMap") as Texture2D;
+                tex = srcModels[i].normalMap;
+
+                hash = hash * 31 + (tex != null ? tex.GetInstanceID() : 0);
+            }
+
+            return hash;
+        }
+    }
+
+    void EnsureNormalMapArray(Model[] srcModels)
+    {
+        var hash = ComputeNormalMapHash(srcModels);
+        if (normalMapArray != null && hash == normalMapHash)
+            return;
+
+        normalMapHash = hash;
+
+        var unique = new List<Texture2D>();
+        var seen = new HashSet<Texture2D>();
+
+        for (var i = 0; i < srcModels.Length; i++)
+        {
+            //var renderer = srcModels[i].GetComponent<Renderer>();
+            //var unityMat = renderer != null ? renderer.sharedMaterial : null;
+
+            //if (unityMat == null || !unityMat.HasProperty("_BumpMap"))
+            //    continue;
+
+            //var tex = unityMat.GetTexture("_BumpMap") as Texture2D;
+            //if (tex == null)
+            //    continue;
+            var model = srcModels[i];
+            if (model.normalMap == null)
+            {
+                continue;
+            }
+
+            var tex = model.normalMap;
+
+            if (seen.Add(tex))
+                unique.Add(tex);
+        }
+
+        normalMapArray = NormalMapArrayBuilder.Build(unique, out normalMapIndexByTexture);
+
+        if (normalMapArray != null)
+            rayTracingMaterial.SetTexture("_NormalMaps", normalMapArray);
+    }
+
+    void ApplyNormalMapParams(Model model, ref RayTracingMaterial rtMat)
+    {
+        var renderer = model.GetComponent<Renderer>();
+        var unityMat = renderer != null ? renderer.sharedMaterial : null;
+
+        var normalTex = (Texture2D)null;
+        var uvScale = Vector2.one;
+        var uvOffset = Vector2.zero;
+
+        //if (unityMat != null && unityMat.HasProperty("_BumpMap"))
+        //{
+        //    normalTex = unityMat.GetTexture("_BumpMap") as Texture2D;
+        //    uvScale = unityMat.GetTextureScale("_BumpMap");
+        //    uvOffset = unityMat.GetTextureOffset("_BumpMap");
+
+        //    if (unityMat.HasProperty("_BumpScale"))
+        //        bumpScale = unityMat.GetFloat("_BumpScale");
+        //}
+        normalTex = model.normalMap;
+
+        rtMat.normalMapIndex =
+            (normalTex != null && normalMapIndexByTexture.TryGetValue(normalTex, out var idx))
+                ? idx
+                : -1;
+
+        //rtMat.normalScale = bumpScale; // Assume 1 for now
+        rtMat.normalScale = Math.Max(1, rtMat.normalScale); // Avoid zero scale
+        rtMat.uvST = new Vector4(uvScale.x, uvScale.y, uvOffset.x, uvOffset.y);
     }
 }
