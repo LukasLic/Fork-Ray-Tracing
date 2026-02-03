@@ -111,6 +111,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   rayTracingEnabled: 1
+  autoRecordMaxFrame: 1000
   autoRecord: 1
   timeBetweenSnapshots: 0
   accumulate: 1
@@ -119,7 +120,7 @@ MonoBehaviour:
   sunFocus: 500
   sunIntensity: 0.1
   sunColor: {r: 1, g: 0.81876767, b: 0.53333336, a: 1}
-  maxBounceCount: 32
+  maxBounceCount: 6
   numRaysPerPixel: 1
   defocusStrength: 0
   divergeStrength: 0

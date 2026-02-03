@@ -46,9 +46,9 @@ Shader "Hidden/Accumulate"
 
 			float4 frag (v2f i) : SV_Target
 			{
-				if(_Accumulate == 0) 
+				if(_Accumulate == 0 || _Frame == 0) 
 				{
-					return tex2D(_MainTex, i.uv);
+					return saturate(tex2D(_MainTex, i.uv));
 				}
 
 				float weight = 0.5f;
@@ -56,7 +56,24 @@ Shader "Hidden/Accumulate"
 				float4 prev = tex2D(_PrevFrame, i.uv);
 				// ///////////////////////////////////////////////////////////////
 				// ///////////////////////////////////////////////////////////////
-				weight = 1.0 / (float)((_Frame/5.0) + 1);
+				if(_Frame < 10) // First ten frames, simple add for 10th frame average
+				{
+					return prev + saturate(sample); 
+				}
+				if(_Frame == 10) // Average of first ten frames
+				{
+					float avgWeight = 1.0 / 10.0;
+					float4 tenthFrame = prev + saturate(sample);
+					return tenthFrame * avgWeight;
+				}
+
+				// After ten frames, do a weighted blend to slowly converge.
+				int offset = 4 * 10; // Offset to account for the first ten frames being added directly.
+				weight = 1.0 / (float)(
+					((_Frame + offset) / 4.0)
+					+ 1
+				);
+				// weight = 1.0 / (float)(_Frame);
 				return lerp(prev, sample, weight);
 				// ///////////////////////////////////////////////////////////////
 				// ///////////////////////////////////////////////////////////////

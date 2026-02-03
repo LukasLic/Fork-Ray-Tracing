@@ -353,6 +353,9 @@ Shader "Custom/RayTracer"
 						int childIndexNear = isNearestA ? childIndexA : childIndexB;
 						int childIndexFar = isNearestA ? childIndexB : childIndexA;
 
+						// stackIndex < 32 ... to avoid overflow TODO
+						// if (dstFar < result.dst && stackIndex < 32) stack[stackIndex++] = childIndexFar;
+						// if (dstNear < result.dst && stackIndex < 32) stack[stackIndex++] = childIndexNear;
 						if (dstFar < result.dst) stack[stackIndex++] = childIndexFar;
 						if (dstNear < result.dst) stack[stackIndex++] = childIndexNear;
 					}
@@ -685,6 +688,9 @@ Shader "Custom/RayTracer"
 
 				for (int rayIndex = 0; rayIndex < NumRaysPerPixel; rayIndex++)
 				{
+					// TODO
+					// No jitter on the first ray?
+
 					// -- Calculate ray origin and direction --
 					// Jitter the starting point of the ray. This allows for a depth of field effect.
 					float2 defocusJitter = RandomPointInCircle(rngState) * DefocusStrength / numPixels.x;
