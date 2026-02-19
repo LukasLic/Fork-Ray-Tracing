@@ -16,18 +16,20 @@ public class RayTracingManager : MonoBehaviour
     }
 
     private bool IsRecording => autoRecordMaxFrame > 0
-        ? (autoRecord && numAccumulatedFrames < autoRecordMaxFrame) || Input.GetKey(KeyCode.Mouse0)
-        : autoRecord || Input.GetKey(KeyCode.Mouse0);
+        ? (autoRecord && numAccumulatedFrames < autoRecordMaxFrame) || (Input.GetKey(KeyCode.LeftControl) && Input.GetKey(KeyCode.Mouse0))
+        : autoRecord || (Input.GetKey(KeyCode.LeftControl) && Input.GetKey(KeyCode.Mouse0));
 
     [Header("Main Settings")]
     [SerializeField] bool rayTracingEnabled = true;
     [SerializeField] int autoRecordMaxFrame = 1000;
     [SerializeField] bool autoRecord = true;
     [SerializeField] float timeBetweenSnapshots = 1f;
-    public bool accumulate = true;
+    [SerializeField] int sectorCountX = 24;
+    [SerializeField] int sectorCountY = 8;
+    [SerializeField] bool accumulate = true;
     [Range(1, 5)]
-    public int denoise = 0;
-    public bool useSky;
+    [SerializeField] int denoise = 0;
+    [SerializeField] bool useSky;
     [SerializeField] float sunFocus = 500;
     [SerializeField] float sunIntensity = 10;
     [SerializeField] Color sunColor = Color.white;
@@ -95,21 +97,23 @@ public class RayTracingManager : MonoBehaviour
         hasBVH = false;
     }
 
-    //private void Update()
-    //{
-    //    if (Input.GetKeyDown(KeyCode.Space))
-    //    {
-    //        numAccumulatedFrames = 1;
-    //        Debug.Log("Reset render");
-    //    }
+    private void Update()
+    {
+        //if (Input.GetKeyDown(KeyCode.Space))
+        //{
+        //    numAccumulatedFrames = 1;
+        //    Debug.Log("Reset render");
+        //}
 
-    //    if (Input.GetKeyDown(KeyCode.S))
-    //    {
-    //        string path = System.IO.Path.Combine(Application.persistentDataPath, "screencap_ray.png");
-    //        ScreenCapture.CaptureScreenshot(path);
-    //        Debug.Log("Screenshot: " + path);
-    //    }
-    //}
+        if (Input.GetKey(KeyCode.LeftControl) && Input.GetKeyDown(KeyCode.F))
+        {
+            var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
+            var filename = $"screencap_ray_{timestamp}.png";
+            string path = System.IO.Path.Combine(Application.persistentDataPath, filename);
+            ScreenCapture.CaptureScreenshot(path);
+            Debug.Log("Screenshot: " + path);
+        }
+    }
 
     // Called after any camera (e.g. game or scene camera) has finished rendering into the src texture
     void OnRenderImage(RenderTexture src, RenderTexture target)

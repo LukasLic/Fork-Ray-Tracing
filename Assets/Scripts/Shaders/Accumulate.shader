@@ -56,6 +56,9 @@ Shader "Hidden/Accumulate"
 				float4 prev = tex2D(_PrevFrame, i.uv);
 				// ///////////////////////////////////////////////////////////////
 				// ///////////////////////////////////////////////////////////////
+				// ///////////////////////////////////////////////////////////////
+				// ///////////////////////////////////////////////////////////////
+				// FIRST TEN FRAMES AVERAGE
 				if(_Frame < 10) // First ten frames, simple add for 10th frame average
 				{
 					return prev + saturate(sample); 
@@ -66,7 +69,26 @@ Shader "Hidden/Accumulate"
 					float4 tenthFrame = prev + saturate(sample);
 					return tenthFrame * avgWeight;
 				}
+				// ///////////////////////////////////////////////////////////////
+				// if(_Frame < 60) // First sixty frames, take brightest
+				// {
+				// 	float3 prevRgb   = prev.rgb;
+				// 	float3 sampleRgb = sample.rgb;
 
+				// 	// HDR luminance (Rec.709)
+				// 	float prevLum   = dot(prevRgb,   float3(0.2126, 0.7152, 0.0722));
+				// 	float sampleLum = dot(sampleRgb, float3(0.2126, 0.7152, 0.0722));
+
+				// 	if (sampleLum > prevLum)
+				// 	{
+				// 		weight = 0.95f;
+				// 		return lerp(prev, sample, weight);
+				// 	}
+					
+				// 	weight = 0.05f;
+				// 	return lerp(prev, sample, weight);
+				// }
+				// ///////////////////////////////////////////////////////////////
 				// After ten frames, do a weighted blend to slowly converge.
 				int offset = 4 * 10; // Offset to account for the first ten frames being added directly.
 				weight = 1.0 / (float)(
@@ -75,6 +97,8 @@ Shader "Hidden/Accumulate"
 				);
 				// weight = 1.0 / (float)(_Frame);
 				return lerp(prev, sample, weight);
+				// ///////////////////////////////////////////////////////////////
+				// ///////////////////////////////////////////////////////////////
 				// ///////////////////////////////////////////////////////////////
 				// ///////////////////////////////////////////////////////////////
 				float3 prevRgb   = prev.rgb;
