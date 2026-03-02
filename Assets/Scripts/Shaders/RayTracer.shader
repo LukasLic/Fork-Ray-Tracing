@@ -45,6 +45,7 @@ Shader "Custom/RayTracer"
 			int MaxBounceCount;
 			int NumRaysPerPixel;
 			int Frame;
+			int ShadowMask;
 
 			// Camera settings
 			float DefocusStrength;
@@ -99,6 +100,7 @@ Shader "Custom/RayTracer"
 				float smoothness;
 				float specularProbability;
 				int flag;
+				int shadowObject;
 
 				int normalScale;    // typical 1
 				int normalMapIndex;   // -1 = none
@@ -468,6 +470,11 @@ Shader "Custom/RayTracer"
 						continue;
 					}
 
+					if(model.material.flag == 3) // Invisible
+					{
+						continue;
+					}
+
 					// Transform ray into model's local coordinate space
 					localRay.origin = mul(model.worldToLocalMatrix, float4(worldRay.origin, 1));
 					localRay.dir = mul(model.worldToLocalMatrix, float4(worldRay.dir, 0));
@@ -584,6 +591,25 @@ Shader "Custom/RayTracer"
 				}
 
 				return incomingLight;
+			}
+
+			int TraceShadowObject(float3 rayOrigin, float3 rayDir)
+			{				
+				int2 stats;
+				TriangleHitInfo triHit;
+				float dstSum = 0;
+
+				Ray ray;
+				ray.origin = rayOrigin;
+				ray.dir = rayDir;
+				ModelHitInfo hitInfo = CalculateRayCollision(ray, 0, stats, triHit);
+
+				if (hitInfo.didHit)
+				{
+					return hitInfo.material.shadowObject;
+				}
+				
+				return 0;
 			}
 
 
@@ -717,6 +743,17 @@ Shader "Custom/RayTracer"
 				// Average the incoming light and distance
 				float3 pixelCol = totalIncomingLight / NumRaysPerPixel;
 				float distance = (distCount > 0) ? (distSum / distCount) : MAX_DISTANCE;
+
+				if (ShadowMask == 1) // Shadowmapping mode
+				{
+					// return float4(pixelCol,i.uv.x);
+
+					float3 rayOrigin = _WorldSpaceCameraPos;
+					float3 rayDir = normalize(focusPoint - rayOrigin);
+					int shadowMap = TraceShadowObject(rayOrigin, rayDir);
+
+					return float4(pixelCol, shadowMap);
+				}
 
 				return float4(pixelCol, distance);
 			}

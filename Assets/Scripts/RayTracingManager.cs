@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Rendering;
+using static UnityEngine.GraphicsBuffer;
 
 public class RayTracingManager : MonoBehaviour
 {
@@ -12,7 +13,16 @@ public class RayTracingManager : MonoBehaviour
         TriangleTestCount = 1,
         BoxTestCount = 2,
         Distance = 3,
-        Normal = 4
+        Normal = 4,
+        Shadowing = 5
+    }
+
+    private enum ShadowingStep
+    {
+        RaycastOriginal = 0,
+        RaycastShadows = 1,
+        CreateShadowMap = 2,
+        ComposeResult = 3,
     }
 
     private bool IsRecording => autoRecordMaxFrame > 0
@@ -40,6 +50,11 @@ public class RayTracingManager : MonoBehaviour
     [SerializeField, Min(0)] float divergeStrength = 0.3f;
     [SerializeField, Min(0)] float focusDistance = 1;
 
+    [Header("Shadowing")]
+    [SerializeField] List<Model> shadowModels = new();
+    [Range(0.0f, 20.0f)][SerializeField] float appliedShadowScale = 1f;
+    private ShadowingStep shadowingStep = ShadowingStep.RaycastOriginal;
+
     [Header("Debug Settings")]
     [SerializeField] VisMode visMode;
     [SerializeField] float triTestVisScale;
@@ -51,6 +66,7 @@ public class RayTracingManager : MonoBehaviour
     [SerializeField] Shader rayTracingShader;
     [SerializeField] Shader accumulateShader;
     [SerializeField] Shader composeShader;
+    [SerializeField] Shader shadowmapShader;
 
     [Header("Info")]
     [SerializeField] int numAccumulatedFrames;
@@ -59,9 +75,13 @@ public class RayTracingManager : MonoBehaviour
     Material rayTracingMaterial;
     Material accumulateMaterial;
     Material composeMaterial;
+    Material shadowmapMaterial;
     RenderTexture resultTexture;
     RenderTexture composedTexture;
     RenderTexture frameCountTexture;
+
+    RenderTexture resultTexture_copy;
+    RenderTexture shadowmap;
 
     // Normal maps fields
     Texture2DArray normalMapArray;
@@ -95,6 +115,7 @@ public class RayTracingManager : MonoBehaviour
     {
         numAccumulatedFrames = 0;
         hasBVH = false;
+        if (visMode == VisMode.Shadowing) shadowingStep = ShadowingStep.RaycastOriginal;
     }
 
     private void Update()
@@ -148,82 +169,11 @@ public class RayTracingManager : MonoBehaviour
 
                 if (visMode == VisMode.Default)
                 {
-                    // Update timer
-                    timeSinceLastSnapshot += IsRecording ? Time.deltaTime : 0f;
-
-                    // TODO: Initialize new snapshot with weight to 0.
-
-                    if(IsRecording && timeSinceLastSnapshot >= timeBetweenSnapshots)
-                    {
-                        //Debug.Log("Time since last snapshot: " + Math.Round((decimal)timeSinceLastSnapshot, 4));
-                        // Reset timer
-                        timeSinceLastSnapshot = 0f;
-
-                        // Create copy of prev frame
-                        RenderTexture prevFrameCopy = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
-                        Graphics.Blit(resultTexture, prevFrameCopy);
-
-                        // Run the ray tracing shader and draw the result to a temp texture
-                        rayTracingMaterial.SetInt("Frame", numAccumulatedFrames);
-                        RenderTexture currentFrame = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
-                        Graphics.Blit(null, currentFrame, rayTracingMaterial);
-
-                        // Accumulate
-                        //Graphics.SetRandomWriteTarget(1, frameCountTexture);
-                        accumulateMaterial.SetInt("_Frame", numAccumulatedFrames);
-                        accumulateMaterial.SetInt("_Accumulate", accumulate ? 1 : 0);
-                        accumulateMaterial.SetTexture("_PrevFrame", prevFrameCopy);
-                        Graphics.Blit(currentFrame, resultTexture, accumulateMaterial);
-                        //Graphics.ClearRandomWriteTargets();
-
-                        // Create copy for composing
-                        RenderTexture resultCopy = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
-                        Graphics.Blit(resultTexture, resultCopy);
-
-                        composeMaterial.SetTexture("_Snapshot01", resultTexture);
-                        composeMaterial.SetInt("_Denoise", denoise);
-                        composeMaterial.SetVector("_Snapshot01_TexelSize",
-                            new Vector4(
-                                1f / resultTexture.width,
-                                1f / resultTexture.height,
-                                resultTexture.width,
-                                resultTexture.height));
-                        Graphics.Blit(null, target, composeMaterial);
-
-                        //// Compose the final image and draw it to screen
-                        //composeMaterial.SetTexture("_Snapshot01", resultTexture);
-                        //Graphics.Blit(null, composedTexture, composeMaterial);
-
-                        //// Draw result to screen
-                        ////Graphics.Blit(resultTexture, target);
-                        //Graphics.Blit(composedTexture, target);
-
-                        // Release temps
-                        RenderTexture.ReleaseTemporary(prevFrameCopy);
-                        RenderTexture.ReleaseTemporary(currentFrame);
-                        RenderTexture.ReleaseTemporary(resultCopy);
-                        numAccumulatedFrames += Application.isPlaying ? 1 : 0;
-                    }
-                    else
-                    {
-                        // Draw result to screen
-                        //Graphics.Blit(resultTexture, target);
-                        //Graphics.Blit(composedTexture, target);
-
-                        // Compose the final image and draw it to screen
-                        composeMaterial.SetTexture("_Snapshot01", resultTexture);
-                        composeMaterial.SetVector("_Snapshot01_TexelSize",
-                            new Vector4(
-                                1f / resultTexture.width,
-                                1f / resultTexture.height,
-                                resultTexture.width,
-                                resultTexture.height));
-                        Graphics.Blit(null, composedTexture, composeMaterial);
-
-                        // Draw result to screen
-                        //Graphics.Blit(resultTexture, target);
-                        Graphics.Blit(composedTexture, target);
-                    }
+                    BlitDefault(src, target);
+                }
+                else if (visMode == VisMode.Shadowing)
+                {
+                    BlitShadowSteps(src, target);
                 }
                 else
                 {
@@ -235,6 +185,150 @@ public class RayTracingManager : MonoBehaviour
             {
                 Graphics.Blit(src, target); // Draw the unaltered camera render to the screen
             }
+        }
+    }
+
+    private void BlitShadowSteps(RenderTexture src, RenderTexture target)
+    {
+        rayTracingMaterial.SetInt("ShadowMask", 0);
+
+        // ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        if (shadowingStep == ShadowingStep.RaycastOriginal)
+        {
+            // Set shadow casters to invisible so they don't interfere with the original raycast
+            if (numAccumulatedFrames <= 1)
+            {
+                //shadowModels.ForEach(x => x.material = RayTracingMaterial.DuplicateFrom(x.material, RayTracingMaterial.MaterialFlag.Invisible));
+                shadowModels.ForEach(x => x.material.flag = RayTracingMaterial.MaterialFlag.Invisible);
+            }
+
+            if (IsRecording) BlitDefault(src, target);
+            else
+            {
+                Graphics.Blit(resultTexture, resultTexture_copy);
+                shadowingStep = ShadowingStep.RaycastShadows;
+                numAccumulatedFrames = 0;
+                shadowModels.ForEach(x => x.material.flag = RayTracingMaterial.MaterialFlag.None);
+            }
+        }
+        // ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        if (shadowingStep == ShadowingStep.RaycastShadows)
+        {
+            if (IsRecording)
+            {
+                rayTracingMaterial.SetInt("ShadowMask", 1);
+                BlitDefault(src, target);
+                rayTracingMaterial.SetInt("ShadowMask", 0);
+            }
+            else
+            {
+                shadowingStep = ShadowingStep.CreateShadowMap;
+                numAccumulatedFrames = 0;
+            }
+        }
+        // ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        if (shadowingStep == ShadowingStep.CreateShadowMap)
+        {
+
+            shadowmapMaterial.SetTexture("_TexRT", resultTexture_copy);
+            shadowmapMaterial.SetTexture("_TexShadow", resultTexture);
+            shadowmapMaterial.SetFloat("_AppliedShadowScale", appliedShadowScale);
+
+            Graphics.Blit(null, shadowmap, shadowmapMaterial);
+
+            shadowingStep = ShadowingStep.ComposeResult;
+            //numAccumulatedFrames = 0;
+        }
+        // ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        if (shadowingStep == ShadowingStep.ComposeResult)
+        {
+            // SKIP (for now)
+            //BlitDefault(src, target);
+
+            Graphics.Blit(shadowmap, target);
+        }
+        // ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    }
+
+    private void BlitDefault(RenderTexture src, RenderTexture target)
+    {
+        
+
+        // Update timer
+        timeSinceLastSnapshot += IsRecording ? Time.deltaTime : 0f;
+
+        // TODO: Initialize new snapshot with weight to 0.
+
+        if (IsRecording && timeSinceLastSnapshot >= timeBetweenSnapshots)
+        {
+            //Debug.Log("Time since last snapshot: " + Math.Round((decimal)timeSinceLastSnapshot, 4));
+            // Reset timer
+            timeSinceLastSnapshot = 0f;
+
+            // Create copy of prev frame
+            RenderTexture prevFrameCopy = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
+            Graphics.Blit(resultTexture, prevFrameCopy);
+
+            // Run the ray tracing shader and draw the result to a temp texture
+            rayTracingMaterial.SetInt("Frame", numAccumulatedFrames);
+            RenderTexture currentFrame = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
+            Graphics.Blit(null, currentFrame, rayTracingMaterial);
+
+            // Accumulate
+            //Graphics.SetRandomWriteTarget(1, frameCountTexture);
+            accumulateMaterial.SetInt("_Frame", numAccumulatedFrames);
+            accumulateMaterial.SetInt("_Accumulate", accumulate ? 1 : 0);
+            accumulateMaterial.SetTexture("_PrevFrame", prevFrameCopy);
+            Graphics.Blit(currentFrame, resultTexture, accumulateMaterial);
+            //Graphics.ClearRandomWriteTargets();
+
+            // Create copy for composing
+            RenderTexture resultCopy = RenderTexture.GetTemporary(src.width, src.height, 0, ShaderHelper.RGBA_SFloat);
+            Graphics.Blit(resultTexture, resultCopy);
+
+            composeMaterial.SetTexture("_Snapshot01", resultTexture);
+            composeMaterial.SetInt("_Denoise", denoise);
+            composeMaterial.SetVector("_Snapshot01_TexelSize",
+                new Vector4(
+                    1f / resultTexture.width,
+                    1f / resultTexture.height,
+                    resultTexture.width,
+                    resultTexture.height));
+            Graphics.Blit(null, target, composeMaterial);
+
+            //// Compose the final image and draw it to screen
+            //composeMaterial.SetTexture("_Snapshot01", resultTexture);
+            //Graphics.Blit(null, composedTexture, composeMaterial);
+
+            //// Draw result to screen
+            ////Graphics.Blit(resultTexture, target);
+            //Graphics.Blit(composedTexture, target);
+
+            // Release temps
+            RenderTexture.ReleaseTemporary(prevFrameCopy);
+            RenderTexture.ReleaseTemporary(currentFrame);
+            RenderTexture.ReleaseTemporary(resultCopy);
+            numAccumulatedFrames += Application.isPlaying ? 1 : 0;
+        }
+        else
+        {
+            // Draw result to screen
+            //Graphics.Blit(resultTexture, target);
+            //Graphics.Blit(composedTexture, target);
+
+            // Compose the final image and draw it to screen
+            composeMaterial.SetTexture("_Snapshot01", resultTexture);
+            composeMaterial.SetVector("_Snapshot01_TexelSize",
+                new Vector4(
+                    1f / resultTexture.width,
+                    1f / resultTexture.height,
+                    resultTexture.width,
+                    resultTexture.height));
+            Graphics.Blit(null, composedTexture, composeMaterial);
+
+            // Draw result to screen
+            //Graphics.Blit(resultTexture, target);
+            Graphics.Blit(composedTexture, target);
         }
     }
 
@@ -251,6 +345,11 @@ public class RayTracingManager : MonoBehaviour
         ShaderHelper.CreateRenderTexture(ref resultTexture, Screen.width, Screen.height, FilterMode.Bilinear, ShaderHelper.RGBA_SFloat, "Result");
         ShaderHelper.CreateRenderTexture(ref composedTexture, Screen.width, Screen.height, FilterMode.Bilinear, ShaderHelper.RGBA_SFloat, "Composed");
         ShaderHelper.CreateFrameCountTexture(ref frameCountTexture, Screen.width, Screen.height, "FrameCount");
+
+        ShaderHelper.InitMaterial(shadowmapShader, ref shadowmapMaterial);
+        ShaderHelper.CreateRenderTexture(ref resultTexture_copy, Screen.width, Screen.height, FilterMode.Bilinear, ShaderHelper.RGBA_SFloat, "ResultCopy");
+        ShaderHelper.CreateRenderTexture(ref shadowmap, Screen.width, Screen.height, FilterMode.Bilinear, ShaderHelper.RGBA_SFloat, "ResultShadow");
+
         models = FindObjectsOfType<Model>();
 
         EnsureNormalMapArray(models);
@@ -280,7 +379,7 @@ public class RayTracingManager : MonoBehaviour
 
     void SetShaderParams()
     {
-        rayTracingMaterial.SetKeyword(debugVisShaderKeyword, visMode != VisMode.Default);
+        rayTracingMaterial.SetKeyword(debugVisShaderKeyword, visMode != VisMode.Default && visMode != VisMode.Shadowing);
         rayTracingMaterial.SetInt("visMode", (int)visMode);
         float debugVisScale = visMode switch
         {
@@ -290,6 +389,7 @@ public class RayTracingManager : MonoBehaviour
             _ => triTestVisScale
         };
         rayTracingMaterial.SetFloat("debugVisScale", debugVisScale);
+        rayTracingMaterial.SetInt("ShadowMask", 0);
         rayTracingMaterial.SetInt("Frame", numAccumulatedFrames);
         rayTracingMaterial.SetInt("UseSky", useSky ? 1 : 0);
 
@@ -394,6 +494,10 @@ public class RayTracingManager : MonoBehaviour
             ShaderHelper.Release(resultTexture);
             ShaderHelper.Release(composedTexture);
             ShaderHelper.Release(frameCountTexture);
+
+            ShaderHelper.Release(resultTexture_copy);
+            ShaderHelper.Release(shadowmap);
+
             Destroy(rayTracingMaterial);
 
             foreach (var snapshot in Snapshots.Values)
