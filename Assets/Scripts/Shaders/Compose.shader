@@ -4,6 +4,7 @@ Shader "Hidden/Compose"
     {
         _MainTex ("Texture", 2D) = "white" {}
         _Snapshot01 ("Snapshot01", 2D) = "black" {}
+        _OverlayTex ("OverlayTex", 2D) = "black" {}
     }
     SubShader
     {
@@ -40,6 +41,9 @@ Shader "Hidden/Compose"
             sampler2D _Snapshot01;
             float4 _Snapshot01_TexelSize; // x=1/width, y=1/height, z=width, w=height
             int _Denoise;
+
+            sampler2D _OverlayTex;
+            int _OverlayEnabled;
 
             float4 SampleSnapshot01Denoised5x5(float2 uv)
             {
@@ -122,20 +126,40 @@ Shader "Hidden/Compose"
 
             float4 frag (v2f i) : SV_Target
             {
+                float3 denoised;
+
                 if(_Denoise >= 5)
                 {
                     float4 s01 = SampleSnapshot01Denoised5x5(i.uv);
-                    return float4(saturate(s01.rgb), 0);
+                    denoised = float3(saturate(s01.rgb));
                 }
-
-                if(_Denoise >= 3)
+                else if(_Denoise >= 3)
                 {
                     float4 s01 = SampleSnapshot01Denoised3x3(i.uv);
-                    return float4(saturate(s01.rgb), 0);
+                    denoised = float3(saturate(s01.rgb));
                 }
-                
-                float4 s01 = tex2D(_Snapshot01, i.uv);
-                return float4(saturate(s01.rgb), 0);
+                else
+                {
+                    float4 s01 = tex2D(_Snapshot01, i.uv);
+                    denoised = float3(saturate(s01.rgb));
+                }
+
+                if(_OverlayEnabled != 0)
+                {
+                    float3 overlay = tex2D(_OverlayTex, i.uv).rgb;
+
+                    float _overlayCutoff = 0.5; // Adjust as needed
+                    float _overlaySoftness = 0.1; // Adjust as needed
+                    float _overlayAlphaScale = 1; // Adjust as needed
+                    
+                    float weight = dot(overlay, float3(0.2126, 0.7152, 0.0722));
+                    float ovA = smoothstep(_overlayCutoff, _overlayCutoff + _overlaySoftness, weight);
+                    ovA = saturate(ovA * _overlayAlphaScale);
+
+				    denoised = denoised * (1.0 - ovA) + overlay;
+                }
+
+                return float4(denoised, 0);
             }
             ENDCG
         }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.PlayerLoop;
 using UnityEngine.Rendering;
 using static UnityEngine.GraphicsBuffer;
 
@@ -55,6 +56,17 @@ public class RayTracingManager : MonoBehaviour
     [Range(0.0f, 20.0f)][SerializeField] float appliedShadowScale = 1f;
     private ShadowingStep shadowingStep = ShadowingStep.RaycastOriginal;
 
+    // Add near your other serialized fields
+    [Header("Overlay Duplicate")]
+    [SerializeField] private Vector3 overlayDuplicateWorldOffset = Vector3.zero;
+    [SerializeField] private GameObject overlayDuplicatePrefab;
+    [SerializeField] private Transform overlayDuplicateParent;
+    [SerializeField] private Material overlayDuplicateMaterial;
+    [SerializeField] private int overlayDuplicateLayer = 7;
+    [SerializeField] private Camera overlayDuplicateCamera;
+    private GameObject overlayDuplicateInstance;
+
+
     [Header("Debug Settings")]
     [SerializeField] VisMode visMode;
     [SerializeField] float triTestVisScale;
@@ -78,6 +90,7 @@ public class RayTracingManager : MonoBehaviour
     Material shadowmapMaterial;
     RenderTexture resultTexture;
     RenderTexture composedTexture;
+    RenderTexture overlayCameraTexture;
     RenderTexture frameCountTexture;
 
     RenderTexture resultTexture_copy;
@@ -118,6 +131,14 @@ public class RayTracingManager : MonoBehaviour
         if (visMode == VisMode.Shadowing) shadowingStep = ShadowingStep.RaycastOriginal;
     }
 
+    private void Awake()
+    {
+        CreateOverlayDuplicate();
+
+        ShaderHelper.CreateRenderTexture(ref overlayCameraTexture, Screen.width, Screen.height, FilterMode.Bilinear, ShaderHelper.RGBA_SFloat, "OverlayCamera", DepthMode.Depth24);
+        overlayDuplicateCamera.enabled = false; // We will manually trigger rendering and blit the result in OnRenderImage
+    }
+
     private void Update()
     {
         //if (Input.GetKeyDown(KeyCode.Space))
@@ -134,6 +155,9 @@ public class RayTracingManager : MonoBehaviour
             ScreenCapture.CaptureScreenshot(path);
             Debug.Log("Screenshot: " + path);
         }
+
+        overlayDuplicateCamera.targetTexture = overlayCameraTexture;
+        overlayDuplicateCamera.Render();
     }
 
     // Called after any camera (e.g. game or scene camera) has finished rendering into the src texture
@@ -149,15 +173,16 @@ public class RayTracingManager : MonoBehaviour
         // Debug.Log("Rendering... isscenecam = " + isSceneCam + "  " + Camera.current.name);
         if (isSceneCam)
         {
-            if (rayTracingEnabled && useSceneView && Application.isPlaying)
-            {
-                InitFrame();
-                Graphics.Blit(null, target, rayTracingMaterial);
-            }
-            else
-            {
-                Graphics.Blit(src, target); // Draw the unaltered camera render to the screen
-            }
+            Graphics.Blit(src, target); // Draw the unaltered camera render to the screen
+            //if (rayTracingEnabled && useSceneView && Application.isPlaying)
+            //{
+            //    InitFrame();
+            //    Graphics.Blit(null, target, rayTracingMaterial);
+            //}
+            //else
+            //{
+            //    Graphics.Blit(src, target); // Draw the unaltered camera render to the screen
+            //}
         }
         else
         {
@@ -245,7 +270,22 @@ public class RayTracingManager : MonoBehaviour
             // SKIP (for now)
             //BlitDefault(src, target);
 
-            Graphics.Blit(shadowmap, target);
+            //overlayDuplicateCamera.targetTexture = overlayCameraTexture;
+            //overlayDuplicateCamera.Render();
+
+            composeMaterial.SetTexture("_Snapshot01", shadowmap);
+            composeMaterial.SetInt("_Denoise", denoise);
+            composeMaterial.SetVector("_Snapshot01_TexelSize",
+                new Vector4(
+                    1f / resultTexture.width,
+                    1f / resultTexture.height,
+                    resultTexture.width,
+                    resultTexture.height));
+            composeMaterial.SetInt("_OverlayEnabled", 1);
+            composeMaterial.SetTexture("_OverlayTex", overlayCameraTexture);
+            Graphics.Blit(null, target, composeMaterial);
+
+            //Graphics.Blit(shadowmap, target);
         }
         // ///////////////////////////////////////////////////////////////////////////////////////////////////////////////
     }
@@ -294,6 +334,7 @@ public class RayTracingManager : MonoBehaviour
                     1f / resultTexture.height,
                     resultTexture.width,
                     resultTexture.height));
+            composeMaterial.SetInt("_OverlayEnabled", 0);
             Graphics.Blit(null, target, composeMaterial);
 
             //// Compose the final image and draw it to screen
@@ -349,6 +390,7 @@ public class RayTracingManager : MonoBehaviour
         ShaderHelper.InitMaterial(shadowmapShader, ref shadowmapMaterial);
         ShaderHelper.CreateRenderTexture(ref resultTexture_copy, Screen.width, Screen.height, FilterMode.Bilinear, ShaderHelper.RGBA_SFloat, "ResultCopy");
         ShaderHelper.CreateRenderTexture(ref shadowmap, Screen.width, Screen.height, FilterMode.Bilinear, ShaderHelper.RGBA_SFloat, "ResultShadow");
+
 
         models = FindObjectsOfType<Model>();
 
@@ -493,6 +535,7 @@ public class RayTracingManager : MonoBehaviour
             ShaderHelper.Release(triangleBuffer, nodeBuffer, modelBuffer);
             ShaderHelper.Release(resultTexture);
             ShaderHelper.Release(composedTexture);
+            ShaderHelper.Release(overlayCameraTexture);
             ShaderHelper.Release(frameCountTexture);
 
             ShaderHelper.Release(resultTexture_copy);
@@ -612,5 +655,118 @@ public class RayTracingManager : MonoBehaviour
         //rtMat.normalScale = bumpScale; // Assume 1 for now
         rtMat.normalScale = Math.Max(1, rtMat.normalScale); // Avoid zero scale
         rtMat.uvST = new Vector4(uvScale.x, uvScale.y, uvOffset.x, uvOffset.y);
+    }
+
+    /// <summary>
+    /// Instantiates <see cref="overlayDuplicatePrefab"/> (optionally under <see cref="overlayDuplicateParent"/>),
+    /// then performs cleanup and setup:
+    /// <list type="number">
+    /// <item><description>Deletes every GameObject in the spawned hierarchy that has a <see cref="Model"/> component (active or inactive).</description></item>
+    /// <item><description>Recursively sets <see cref="overlayDuplicateLayer"/> on all remaining objects.</description></item>
+    /// <item><description>For each <see cref="MeshRenderer"/>, replaces all materials with <see cref="overlayDuplicateMaterial"/>.</description></item>
+    /// </list>
+    /// </summary>
+    private void CreateOverlayDuplicate(bool force = true)
+    {
+        //if (overlayDuplicatePrefab != null && overlayDuplicateParent != null && overlayDuplicateMaterial != null)
+        //{
+        //    overlayDuplicateInstance = Instantiate(overlayDuplicatePrefab, overlayDuplicateParent);
+        //    var renderers = overlayDuplicateInstance.GetComponentsInChildren<MeshRenderer>();
+        //    foreach (var renderer in renderers)
+        //    {
+        //        renderer.sharedMaterial = overlayDuplicateMaterial;
+        //        renderer.gameObject.layer = overlayDuplicateLayer;
+        //    }
+        //}
+        if (overlayDuplicatePrefab == null)
+            return;
+
+        if (overlayDuplicateInstance != null)
+            if (force) Destroy(overlayDuplicateInstance);
+            else return;
+
+        overlayDuplicateInstance = overlayDuplicateParent != null
+                        ? Instantiate(overlayDuplicatePrefab, overlayDuplicateWorldOffset, Quaternion.identity, overlayDuplicateParent)
+                        : Instantiate(overlayDuplicatePrefab, overlayDuplicateWorldOffset, Quaternion.identity);
+
+        overlayDuplicateInstance.name = $"{overlayDuplicatePrefab.name}_OverlayDuplicate";
+
+        RemoveModelGameObjectsRecursive(overlayDuplicateInstance.transform);
+        if (overlayDuplicateInstance == null)
+            return;
+
+        ApplyOverlaySettingsRecursive(overlayDuplicateInstance.transform);
+    }
+
+    /// <summary>
+    /// Finds all <see cref="Model"/> components under <paramref name="root"/> (including inactive objects),
+    /// and destroys their owning GameObjects. If the root itself carries a <see cref="Model"/>,
+    /// only the component is removed to avoid destroying the spawned instance root.
+    /// </summary>
+    /// <param name="root">Root transform of the spawned overlay duplicate hierarchy.</param>
+    private void RemoveModelGameObjectsRecursive(Transform root)
+    {
+        var models = root.GetComponentsInChildren<Model>(true);
+
+        for (var i = 0; i < models.Length; i++)
+        {
+            var model = models[i];
+            if (model == null)
+                continue;
+
+            var go = model.gameObject;
+            if (go == null)
+                continue;
+
+            if (model.material.flag != RayTracingMaterial.MaterialFlag.Invisible &&
+                model.material.flag != RayTracingMaterial.MaterialFlag.InvisibleLight)
+                continue;
+
+            if (overlayDuplicateInstance != null && go == overlayDuplicateInstance)
+            {
+                Destroy(model);
+                continue;
+            }
+
+            Destroy(go);
+        }
+    }
+
+    /// <summary>
+    /// Recursively applies overlay settings to <paramref name="t"/> and all descendants:
+    /// sets the GameObject layer to <see cref="overlayDuplicateLayer"/> and, if a <see cref="MeshRenderer"/> is present,
+    /// replaces all renderer materials with <see cref="overlayDuplicateMaterial"/>.
+    /// </summary>
+    /// <param name="t">Current transform node being processed.</param>
+    private void ApplyOverlaySettingsRecursive(Transform t)
+    {
+        if (t == null)
+            return;
+
+        t.gameObject.layer = overlayDuplicateLayer;
+
+        if (t.gameObject.TryGetComponent<ParticleSystem>(out var ps))
+            ps.Play();
+
+        var meshRenderer = t.GetComponent<MeshRenderer>();
+        if (meshRenderer != null && overlayDuplicateMaterial != null)
+        {
+            var shared = meshRenderer.sharedMaterials;
+            if (shared != null && shared.Length > 0)
+            {
+                var mats = new Material[shared.Length];
+                for (var m = 0; m < mats.Length; m++)
+                    mats[m] = overlayDuplicateMaterial;
+
+                meshRenderer.sharedMaterials = mats;
+            }
+            else
+            {
+                meshRenderer.sharedMaterial = overlayDuplicateMaterial;
+            }
+        }
+
+        for (var i = 0; i < t.childCount; i++)
+            ApplyOverlaySettingsRecursive(t.GetChild(i));
     }
 }

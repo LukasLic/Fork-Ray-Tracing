@@ -45,4 +45,9 @@ public class Model : MonoBehaviour
 
         meshRenderer.sharedMaterial.SetTexture("_BumpMap", normalMap);
     }
+
+    public bool IsShadowObject()
+    {
+        return material.shadowObject == 1;
+    }
 }
